@@ -1,3 +1,5 @@
+# Prompt 04: Integrate README Claude Skill
+
 Act like a senior DevOps engineer designing a Claude skill pipeline for self maintaining GitHub documentation.
 
 Repository:
@@ -75,31 +77,35 @@ The skill must:
    docs/readme-refresh.md
 
 10. The GitHub Action should:
-   - run weekly
-   - run on workflow_dispatch
-   - collect repo context
-   - generate a README refresh prompt
-   - avoid committing directly to main
-   - create a pull request instead
-   - label the PR as documentation and automation
+
+    - run weekly
+    - run on workflow_dispatch
+    - collect repo context
+    - generate a README refresh prompt
+    - avoid committing directly to main
+    - create a pull request instead
+    - label the PR as documentation and automation
 
 11. Include security notes:
-   - do not expose OAuth client secrets
-   - do not print tokens
-   - do not include user playlist data in README
-   - do not commit generated exports
-   - redact .env values
+
+    - do not expose OAuth client secrets
+    - do not print tokens
+    - do not include user playlist data in README
+    - do not commit generated exports
+    - redact .env values
 
 12. Include repo specific documentation expectations:
-   - YouTube Data API v3 setup
-   - OAuth scope explanation
-   - playlist export workflow
-   - dry run safety model
-   - quota warnings
-   - CLI command examples
-   - JSON and CSV output examples
+
+    - YouTube Data API v3 setup
+    - OAuth scope explanation
+    - playlist export workflow
+    - dry run safety model
+    - quota warnings
+    - CLI command examples
+    - JSON and CSV output examples
 
 Style requirements:
+
 - direct
 - technical
 - no fluff
