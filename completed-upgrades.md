@@ -17,6 +17,7 @@
 6. Added config driven category matching through JSON rules with YAML support.
 7. Added playlist title normalization and alias support for near duplicate playlist names.
 8. Added confidence scores and detailed reasons for category move suggestions.
+9. Added review only liked video self image flagging based on configurable keywords and score thresholds.
 
 ## Apply implementation
 
@@ -54,6 +55,7 @@
 4. Verified the new test suite, linting, and analyze flow locally after the changes.
 5. Added coverage reporting, coverage artifact upload, cached dependency installs, and badge publishing in CI.
 6. Added CI step summaries that explicitly call out which required step failed.
+7. Added CI log capture and summary excerpts so failed runs show the broken step and recent command output directly in the job summary.
 
 ## User interfaces
 

@@ -13,34 +13,48 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: "pip"
 
       - name: Install dependencies
+        shell: bash
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Run Ruff
         id: ruff
         continue-on-error: true
-        run: ruff check src tests
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p ci-logs
+          python -m ruff check src tests scripts 2>&1 | tee ci-logs/ruff.log
 
       - name: Run tests with coverage
         id: pytest
         continue-on-error: true
-        run: pytest --cov=src --cov-report=term-missing --cov-report=xml --cov-report=html
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p ci-logs
+          python -m pytest --cov=src --cov-report=term-missing --cov-report=xml --cov-report=html 2>&1 | tee ci-logs/pytest.log
 
       - name: Generate coverage badge
         id: coverage_badge
         if: steps.pytest.outcome == 'success'
         continue-on-error: true
-        run: python scripts/generate_coverage_badge.py coverage.xml badges/coverage.svg
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p ci-logs
+          python scripts/generate_coverage_badge.py coverage.xml badges/coverage.svg 2>&1 | tee ci-logs/coverage-badge.log
 
       - name: Write coverage summary
         if: steps.pytest.outcome == 'success'
@@ -61,28 +75,51 @@ jobs:
             coverage.xml
             htmlcov
             badges/coverage.svg
+            ci-logs
 
       - name: Write CI status summary
         if: always()
         shell: python
-        env:
-          RUFF_OUTCOME: ${{ steps.ruff.outcome }}
-          PYTEST_OUTCOME: ${{ steps.pytest.outcome }}
-          BADGE_OUTCOME: ${{ steps.coverage_badge.outcome }}
         run: |
+          from pathlib import Path
+
+          def tail_text(path: str, line_count: int = 25) -> str:
+              file_path = Path(path)
+              if not file_path.exists():
+                  return "No log file was captured for this step."
+              lines = file_path.read_text(encoding="utf-8", errors="replace").splitlines()
+              return "\n".join(lines[-line_count:]) if lines else "Log file was empty."
+
           failures = []
           if "${{ steps.ruff.outcome }}" != "success":
-              failures.append(("Ruff", "Linting failed. Run `python -m ruff check src tests scripts` locally."))
+              failures.append((
+                  "Ruff",
+                  "Linting failed. Run `python -m ruff check src tests scripts` locally.",
+                  tail_text("ci-logs/ruff.log"),
+              ))
           if "${{ steps.pytest.outcome }}" != "success":
-              failures.append(("Pytest", "Tests or coverage failed. Run `python -m pytest` locally."))
+              failures.append((
+                  "Pytest",
+                  "Tests or coverage failed. Run `python -m pytest --cov=src --cov-report=term-missing --cov-report=xml --cov-report=html` locally.",
+                  tail_text("ci-logs/pytest.log"),
+              ))
           if "${{ steps.coverage_badge.outcome }}" not in ("success", "skipped", ""):
-              failures.append(("Coverage Badge", "Badge generation failed. Run `python scripts/generate_coverage_badge.py coverage.xml badges/coverage.svg`."))
+              failures.append((
+                  "Coverage Badge",
+                  "Badge generation failed. Run `python scripts/generate_coverage_badge.py coverage.xml badges/coverage.svg`.",
+                  tail_text("ci-logs/coverage-badge.log"),
+              ))
 
           with open("${{ github.step_summary }}", "a", encoding="utf-8") as handle:
               handle.write("## CI Status Summary\n\n")
               if failures:
-                  for name, message in failures:
+                  for name, message, log_tail in failures:
                       handle.write(f"- Broken step: **{name}**. {message}\n")
+                      handle.write("\n")
+                      handle.write("Last log lines:\n\n")
+                      handle.write("```text\n")
+                      handle.write(f"{log_tail}\n")
+                      handle.write("```\n\n")
               else:
                   handle.write("- All CI steps passed.\n")
 

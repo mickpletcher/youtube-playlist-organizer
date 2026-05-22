@@ -2,6 +2,19 @@
 
 ## 2026-05-21
 
+### Liked video self image review
+
+1. Added export support for the YouTube liked videos playlist when it is available on the authenticated account.
+2. Added configurable liked video self image review rules to `config/playlist-rules.json`.
+3. Added review only liked video flags with scores and reasons to the generated plan, markdown report, and CSV review export.
+
+### CI workflow hardening
+
+1. Updated the workflow to `actions/checkout@v5` and `actions/setup-python@v6` to avoid the Node 20 deprecation warning shown by GitHub Actions.
+2. Added persisted CI log files for `ruff`, `pytest`, and coverage badge generation so failed runs keep the command output as artifacts.
+3. Expanded the GitHub job summary to include the broken step plus a tail of the failing command output.
+4. Set `asyncio_default_fixture_loop_scope = function` in `pytest.ini` so the test suite runs without the pytest asyncio scope warning.
+
 ### UI review improvements
 
 1. Added grouped suggested move tables by source and target playlist in the local web UI.
