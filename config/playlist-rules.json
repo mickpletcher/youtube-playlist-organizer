@@ -1,0 +1,100 @@
+{
+  "privacy_defaults": {
+    "created_playlist_privacy": "private"
+  },
+  "keep_rules": {
+    "preferred_playlist_titles": ["favorites"],
+    "preferred_privacy_order": ["private", "unlisted", "public"]
+  },
+  "playlist_merge_preferences": {
+    "prefer_private_target": true,
+    "canonical_playlist_strategy": "largest_first"
+  },
+  "liked_video_review": {
+    "enabled": true,
+    "liked_playlist_titles": ["Liked videos", "Liked Videos"],
+    "self_image_flag_rules": [
+      {
+        "keyword_sets": [["looksmax"], ["looksmaxxing"]],
+        "reason": "Looksmax style content can reinforce appearance fixation.",
+        "severity": "high"
+      },
+      {
+        "keyword_sets": [["alpha male"], ["high value man"], ["sigma male"]],
+        "reason": "Status or dominance framing may push self worth into external labels.",
+        "severity": "medium"
+      },
+      {
+        "keyword_sets": [["face rating"], ["attractive"], ["ugly"]],
+        "reason": "Appearance ranking content can be rough on self image.",
+        "severity": "medium"
+      },
+      {
+        "keyword_sets": [["glow up"], ["masculinity"], ["women only want"]],
+        "reason": "Identity or desirability framing may be worth reviewing.",
+        "severity": "low"
+      }
+    ]
+  },
+  "playlist_aliases": {
+    "rving": "rv",
+    "recipes": "recipe",
+    "recipe": "recipe",
+    "workouts": "workout",
+    "workout": "workout",
+    "trainings": "training",
+    "training": "training",
+    "gamings": "gaming",
+    "gaming": "gaming"
+  },
+  "token_aliases": {
+    "rving": "rv",
+    "recipes": "recipe",
+    "workouts": "workout",
+    "trainings": "training"
+  },
+  "category_rules": [
+    {
+      "source_playlists": ["AI", "Tech"],
+      "target_playlist": "GitHub",
+      "keyword_sets": [["github"], ["copilot"], ["spec-driven"], ["spec driven"], ["/spec"], ["claude code"]],
+      "reason": "GitHub and coding workflow content should live in GitHub."
+    },
+    {
+      "source_playlists": ["AI", "Tech"],
+      "target_playlist": "ChatGPT",
+      "keyword_sets": [["chatgpt"], ["openai"], ["custom gpt"], ["gpt"]],
+      "reason": "ChatGPT and OpenAI content should live in ChatGPT."
+    },
+    {
+      "source_playlists": ["AI", "Tech"],
+      "target_playlist": "Prompt Engineering",
+      "keyword_sets": [["prompt"], ["prompts"]],
+      "reason": "Prompt specific content should live in Prompt Engineering."
+    },
+    {
+      "source_playlists": ["DIY"],
+      "target_playlist": "Solar",
+      "keyword_sets": [["solar"], ["battery"], ["inverter"], ["off-grid"]],
+      "reason": "Solar system content should live in Solar."
+    },
+    {
+      "source_playlists": ["DIY"],
+      "target_playlist": "Metal Fabrication",
+      "keyword_sets": [["weld"], ["welding"], ["fabrication"], ["metal"]],
+      "reason": "Metalwork content should live in Metal Fabrication."
+    },
+    {
+      "source_playlists": ["DIY"],
+      "target_playlist": "Woodworking",
+      "keyword_sets": [["woodworking"], ["wood"], ["cabinet"]],
+      "reason": "Woodworking content should live in Woodworking."
+    },
+    {
+      "source_playlists": ["DIY"],
+      "target_playlist": "DIY Closet",
+      "keyword_sets": [["closet"]],
+      "reason": "Closet build content should live in DIY Closet."
+    }
+  ]
+}

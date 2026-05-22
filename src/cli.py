@@ -101,13 +101,16 @@ def export(
 ):
     """Export all playlists and their videos to JSON and CSV."""
     from src.auth.oauth import get_youtube_client
-    from src.api.youtube import get_playlists, get_playlist_items
+    from src.api.youtube import get_liked_playlist, get_playlists, get_playlist_items
     from src.export.exporter import export_json, export_csv
 
     client = get_youtube_client(client_secret, token_file, readonly=True)
 
     console.print("\n[bold]Fetching playlists...[/bold]")
     playlists = get_playlists(client)
+    liked_playlist = get_liked_playlist(client)
+    if liked_playlist and all(playlist.id != liked_playlist.id for playlist in playlists):
+        playlists.append(liked_playlist)
     console.print(f"Found {len(playlists)} playlist(s). Fetching videos...")
 
     items_by_playlist: dict = {}
@@ -134,6 +137,11 @@ def analyze(
     input_json: str = typer.Option("data/playlists.json", help="Path to exported playlists JSON"),
     plan_output: str = typer.Option("data/playlist-plan.json", help="Path to write plan JSON"),
     report_output: str = typer.Option("data/playlist-report.md", help="Path to write review report"),
+    review_csv_output: str = typer.Option("data/playlist-review.csv", help="Path to write review CSV"),
+    rules_config: str = typer.Option(
+        "config/playlist-rules.json",
+        help="Path to category and playlist normalization rules in JSON or YAML format",
+    ),
     include_category_moves: bool = typer.Option(
         False,
         "--include-category-moves",
@@ -142,7 +150,7 @@ def analyze(
 ):
     """Scan playlists for duplicates and write a plan."""
     from src.analysis.duplicates import find_duplicates, load_export
-    from src.analysis.planner import generate_plan, write_plan, write_report
+    from src.analysis.planner import generate_plan, write_plan, write_report, write_review_csv
 
     try:
         playlists_data = load_export(input_json)
@@ -152,9 +160,24 @@ def analyze(
         raise typer.Exit(1)
 
     duplicates = find_duplicates(playlists_data)
-    plan = generate_plan(duplicates, playlists_data, include_category_moves=include_category_moves)
+    try:
+        plan = generate_plan(
+            duplicates,
+            playlists_data,
+            include_category_moves=include_category_moves,
+            rules_config_path=rules_config,
+        )
+    except FileNotFoundError:
+        console.print(f"[red]Not found: {rules_config}[/red]")
+        console.print("Create the rules config file or point analyze at a valid JSON or YAML config.")
+        raise typer.Exit(1)
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+
     write_plan(plan, plan_output)
     write_report(plan, report_output)
+    write_review_csv(plan, review_csv_output)
 
     summary = plan["summary"]
     console.print(f"\n[bold]Duplicate videos:[/bold] {len(duplicates)}")
@@ -186,7 +209,8 @@ def analyze(
             console.print(f"\nShowing 20 of {len(duplicates)} duplicate videos.")
 
     console.print(f"\n[green]Plan written to[/green] {plan_output}")
-    console.print(f"[green]Review report written to[/green] {report_output}\n")
+    console.print(f"[green]Review report written to[/green] {report_output}")
+    console.print(f"[green]Review CSV written to[/green] {review_csv_output}\n")
 
 
 @app.command()
@@ -396,6 +420,19 @@ def apply(
             console.print(f"Deleted merged playlist [bold]{source_playlist['playlist_title']}[/bold]")
 
     console.print(f"\n[green]Applied {completed} change(s).[/green]\n")
+
+
+@app.command()
+def ui(
+    host: str = typer.Option("127.0.0.1", help="Host for the local web UI"),
+    port: int = typer.Option(8765, help="Port for the local web UI"),
+    no_browser: bool = typer.Option(False, "--no-browser", help="Do not open the browser automatically"),
+):
+    """Start the local web UI for non terminal users."""
+    from src.webui.server import run_ui_server
+
+    console.print(f"[green]Starting UI at http://{host}:{port}[/green]")
+    run_ui_server(host=host, port=port, open_browser_on_start=not no_browser)
 
 
 if __name__ == "__main__":

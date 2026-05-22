@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import re
 from collections import Counter
@@ -10,7 +11,11 @@ from typing import Any
 from src.analysis.rules import (
     build_overlap_review,
     find_category_moves,
+    find_liked_video_flags,
     find_same_title_playlist_merges,
+    get_keep_rules,
+    get_privacy_defaults,
+    load_rules_config,
 )
 
 
@@ -182,23 +187,39 @@ def score_occurrence(
 def choose_keep_occurrence(
     duplicate: dict[str, Any],
     profiles: dict[str, dict[str, Any]],
+    rules_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     occurrences = duplicate["occurrences"]
-    favorites = [
-        occurrence
-        for occurrence in occurrences
-        if occurrence["playlist_title"].strip().lower() == "favorites"
+    keep_rules = get_keep_rules(rules_config)
+    preferred_titles = [
+        title.strip().lower()
+        for title in keep_rules.get("preferred_playlist_titles", [])
+        if title.strip()
     ]
-    if favorites:
-        return favorites[0]
 
-    private_occurrences = [
-        occurrence
-        for occurrence in occurrences
-        if occurrence.get("playlist_privacy", "").strip().lower() == "private"
+    for preferred_title in preferred_titles:
+        matching = [
+            occurrence
+            for occurrence in occurrences
+            if occurrence["playlist_title"].strip().lower() == preferred_title
+        ]
+        if matching:
+            return matching[0]
+
+    preferred_privacy_order = [
+        privacy.strip().lower()
+        for privacy in keep_rules.get("preferred_privacy_order", [])
+        if privacy.strip()
     ]
-    if private_occurrences:
-        occurrences = private_occurrences
+    for preferred_privacy in preferred_privacy_order:
+        matching = [
+            occurrence
+            for occurrence in occurrences
+            if occurrence.get("playlist_privacy", "").strip().lower() == preferred_privacy
+        ]
+        if matching:
+            occurrences = matching
+            break
 
     scored_occurrences = []
     for occurrence in occurrences:
@@ -306,13 +327,15 @@ def generate_plan(
     duplicates: list[dict[str, Any]],
     playlists_data: list[dict[str, Any]],
     include_category_moves: bool = False,
+    rules_config_path: str | None = None,
 ) -> dict[str, Any]:
     profiles = build_playlist_profiles(playlists_data)
+    rules_config = load_rules_config(rules_config_path)
     actions = []
     seen_playlist_creations = set()
 
     for duplicate in duplicates:
-        keep_in = choose_keep_occurrence(duplicate, profiles)
+        keep_in = choose_keep_occurrence(duplicate, profiles, rules_config)
         remove_from = [
             occurrence
             for occurrence in duplicate["occurrences"]
@@ -334,7 +357,7 @@ def generate_plan(
     actions.extend(find_deleted_video_items(playlists_data))
 
     duplicate_lookup = build_duplicate_lookup(actions)
-    category_moves = find_category_moves(playlists_data)
+    category_moves = find_category_moves(playlists_data, rules_config)
     planned_category_moves = []
     for move in category_moves:
         if should_skip_move_due_to_duplicate(move, duplicate_lookup):
@@ -346,11 +369,15 @@ def generate_plan(
 
         target_title = move["to_playlist"]["playlist_title"]
         if not move["to_playlist"].get("playlist_id") and target_title not in seen_playlist_creations:
+            privacy_defaults = get_privacy_defaults(rules_config)
             actions.append(
                 {
                     "action": "create_playlist",
                     "title": target_title,
-                    "privacy": move["to_playlist"]["playlist_privacy"],
+                    "privacy": privacy_defaults.get(
+                        "created_playlist_privacy",
+                        move["to_playlist"]["playlist_privacy"],
+                    ),
                     "reason": "Category rule requires a dedicated playlist",
                 }
             )
@@ -358,11 +385,12 @@ def generate_plan(
 
         actions.append(move)
 
-    merge_actions = find_same_title_playlist_merges(playlists_data)
+    merge_actions = find_same_title_playlist_merges(playlists_data, rules_config)
     actions.extend(merge_actions)
 
     summary = summarize_actions(actions)
-    overlap_review = build_overlap_review(playlists_data)
+    overlap_review = build_overlap_review(playlists_data, rules_config)
+    liked_video_flags = find_liked_video_flags(playlists_data, rules_config)
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -370,7 +398,9 @@ def generate_plan(
         "review": {
             "overlap_candidates": overlap_review,
             "category_move_candidates": planned_category_moves,
+            "liked_video_flags": liked_video_flags,
         },
+        "rules_config_path": rules_config_path or "auto",
         "actions": actions,
     }
 
@@ -387,6 +417,7 @@ def write_report(
     summary = plan["summary"]
     overlap_candidates = plan.get("review", {}).get("overlap_candidates", [])
     category_move_candidates = plan.get("review", {}).get("category_move_candidates", [])
+    liked_video_flags = plan.get("review", {}).get("liked_video_flags", [])
     actions = plan.get("actions", [])
     duplicate_actions = [action for action in actions if action["action"] == "remove_duplicate"]
     deleted_actions = [action for action in actions if action["action"] == "remove_deleted"]
@@ -397,6 +428,7 @@ def write_report(
         "# Playlist Analysis Report",
         "",
         f"Generated: `{plan['generated_at']}`",
+        f"Rules config: `{plan.get('rules_config_path', 'auto')}`",
         "",
         "## Snapshot",
         "",
@@ -408,6 +440,7 @@ def write_report(
         f"- Playlist item moves: {summary['playlist_item_moves']}",
         f"- Playlist item removals: {summary['playlist_item_removals']}",
         f"- Suggested category moves not yet queued: {len(category_move_candidates) if not move_actions else 0}",
+        f"- Liked video self image review flags: {len(liked_video_flags)}",
         "",
         "## Automatic Actions",
         "",
@@ -428,6 +461,7 @@ def write_report(
             lines.append(
                 f"- Merge `{source['playlist_title']}` ({source['item_count']} items) into "
                 f"`{target['playlist_title']}` ({target['item_count']} items). "
+                f"Normalized match: `{action['normalized_title']}`. "
                 f"Move {len(action['move_items'])} unique items and remove {len(action['remove_items'])} duplicates."
             )
         lines.append("")
@@ -440,9 +474,12 @@ def write_report(
             ]
         )
         for action in move_actions[:25]:
+            confidence_reasons = "; ".join(action.get("confidence_reasons", []))
             lines.append(
                 f"- `{action['title']}`: `{action['from_playlist']['playlist_title']}` -> "
-                f"`{action['to_playlist']['playlist_title']}`. Reason: {action['rule']}"
+                f"`{action['to_playlist']['playlist_title']}`. "
+                f"Confidence: {action.get('confidence_label', 'unknown')} ({action.get('confidence_score', 0)}). "
+                f"Reason: {action['rule']}. Details: {confidence_reasons}"
             )
         if len(move_actions) > 25:
             lines.append(f"- ... {len(move_actions) - 25} more category move actions in the JSON plan.")
@@ -458,13 +495,38 @@ def write_report(
             ]
         )
         for action in category_move_candidates[:25]:
+            confidence_reasons = "; ".join(action.get("confidence_reasons", []))
             lines.append(
                 f"- `{action['title']}`: `{action['from_playlist']['playlist_title']}` -> "
-                f"`{action['to_playlist']['playlist_title']}`. Reason: {action['rule']}"
+                f"`{action['to_playlist']['playlist_title']}`. "
+                f"Confidence: {action.get('confidence_label', 'unknown')} ({action.get('confidence_score', 0)}). "
+                f"Reason: {action['rule']}. Details: {confidence_reasons}"
             )
         if len(category_move_candidates) > 25:
             lines.append(
                 f"- ... {len(category_move_candidates) - 25} more suggested category moves in the JSON plan review section."
+            )
+        lines.append("")
+
+    if liked_video_flags:
+        lines.extend(
+            [
+                "## Liked Video Self Image Review",
+                "",
+                "These are review only flags from the liked videos playlist. Nothing here is auto removed.",
+                "",
+            ]
+        )
+        for item in liked_video_flags[:25]:
+            matched = ", ".join(item.get("matched_keywords", []))
+            lines.append(
+                f"- `{item['title']}`: severity {item['severity']}, confidence "
+                f"{item['confidence_label']} ({item['confidence_score']}). "
+                f"Reason: {item['reason']} Matched: {matched}"
+            )
+        if len(liked_video_flags) > 25:
+            lines.append(
+                f"- ... {len(liked_video_flags) - 25} more liked video review flags in the JSON plan review section."
             )
         lines.append("")
 
@@ -510,7 +572,8 @@ def write_report(
         for review in overlap_candidates[:20]:
             lines.append(
                 f"- `{review['left_playlist']}` vs `{review['right_playlist']}`: "
-                f"{review['shared_videos']} shared, jaccard {review['jaccard']}, containment {review['containment']}."
+                f"{review['shared_videos']} shared, jaccard {review['jaccard']}, containment {review['containment']}. "
+                f"Reason: {review['review_reason']}"
             )
         if len(overlap_candidates) > 20:
             lines.append(f"- ... {len(overlap_candidates) - 20} more overlap pairs in the JSON plan review section.")
@@ -521,3 +584,91 @@ def write_report(
 
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_text("\n".join(lines), encoding="utf-8")
+
+
+def write_review_csv(
+    plan: dict[str, Any],
+    path: str = "data/playlist-review.csv",
+) -> None:
+    rows = []
+
+    for action in plan.get("review", {}).get("category_move_candidates", []):
+        rows.append(
+            {
+                "review_type": "category_move",
+                "title": action["title"],
+                "source_playlist": action["from_playlist"]["playlist_title"],
+                "target_playlist": action["to_playlist"]["playlist_title"],
+                "confidence_label": action.get("confidence_label", ""),
+                "confidence_score": action.get("confidence_score", ""),
+                "reason": action["rule"],
+                "details": "; ".join(action.get("confidence_reasons", [])),
+                "shared_videos": "",
+                "jaccard": "",
+                "containment": "",
+                "merge_candidate": "",
+            }
+        )
+
+    for review in plan.get("review", {}).get("overlap_candidates", []):
+        rows.append(
+            {
+                "review_type": "overlap",
+                "title": "",
+                "source_playlist": review["left_playlist"],
+                "target_playlist": review["right_playlist"],
+                "confidence_label": "",
+                "confidence_score": "",
+                "reason": review["review_reason"],
+                "details": (
+                    f"left_normalized={review['left_normalized']}; "
+                    f"right_normalized={review['right_normalized']}"
+                ),
+                "shared_videos": review["shared_videos"],
+                "jaccard": review["jaccard"],
+                "containment": review["containment"],
+                "merge_candidate": review["merge_candidate"],
+            }
+        )
+
+    for item in plan.get("review", {}).get("liked_video_flags", []):
+        rows.append(
+            {
+                "review_type": "liked_video_flag",
+                "title": item["title"],
+                "source_playlist": item["playlist_title"],
+                "target_playlist": "",
+                "confidence_label": item.get("confidence_label", ""),
+                "confidence_score": item.get("confidence_score", ""),
+                "reason": item["reason"],
+                "details": (
+                    f"severity={item['severity']}; "
+                    f"matched_keywords={', '.join(item.get('matched_keywords', []))}"
+                ),
+                "shared_videos": "",
+                "jaccard": "",
+                "containment": "",
+                "merge_candidate": "",
+            }
+        )
+
+    fieldnames = [
+        "review_type",
+        "title",
+        "source_playlist",
+        "target_playlist",
+        "confidence_label",
+        "confidence_score",
+        "reason",
+        "details",
+        "shared_videos",
+        "jaccard",
+        "containment",
+        "merge_candidate",
+    ]
+
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)

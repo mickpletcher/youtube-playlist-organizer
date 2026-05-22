@@ -1,50 +1,61 @@
 # YouTube Playlist Organizer
 
-This tool helps you clean up and reorganize your YouTube playlists.
+![Coverage Badge](badges/coverage.svg)
 
-It does three main jobs:
+This project helps you clean up and reorganize your YouTube playlists.
 
-1. Exports your current playlists and videos so you can inspect them locally.
-2. Builds a cleanup plan and a review report.
-3. Applies changes to YouTube only when you explicitly approve them.
+It supports both:
 
-If you are new to Python, APIs, or command line tools, start at **Quick Start** and follow the steps in order.
+1. A terminal workflow
+2. A simple local web UI for non terminal users
+
+The tool is designed to be cautious.
+
+By default:
+
+1. It exports your playlist data locally.
+2. It builds a review plan.
+3. It previews changes before anything is applied.
+4. It requires explicit confirmation before live YouTube writes.
+
+## What It Can Do
+
+This project can:
+
+1. Detect duplicate videos across playlists
+2. Detect deleted video entries
+3. Merge playlists with duplicate or aliased titles
+4. Suggest broader reorganization moves without auto applying them by default
+5. Export review files for terminal, Markdown, JSON, and Excel style review
+6. Run through a local web UI if you do not want to use the terminal
+
+## Safety Model
+
+This project does not change YouTube automatically.
+
+Safe behavior by default:
+
+1. `export` only downloads data
+2. `analyze` only writes local review files
+3. `apply` is a dry run unless you type `APPLY`
+
+Important:
+
+1. There is no built in undo
+2. Suggested category moves are review only unless you explicitly include them in the apply plan
+3. You should always review the generated files before a live apply
 
 ## Project Tracking Files
 
-These files track project history and next steps:
+These root files track project state:
 
 1. `changelogs.md`
 2. `future-upgrades.md`
 3. `completed-upgrades.md`
 
-## What This Tool Is Good For
-
-Use this tool if you have a lot of saved playlists and want to:
-
-1. Remove duplicate videos that are saved in more than one playlist.
-2. Remove entries for deleted videos.
-3. Merge duplicate playlists that have the same title.
-4. Review suggestions for broader reorganization before doing anything live.
-
-This tool is built to be cautious.
-
-By default:
-
-1. `analyze` creates files for review.
-2. `apply` only previews the plan.
-3. Nothing changes on YouTube until you run `apply --confirm APPLY`.
-
-## What This Tool Does Not Do
-
-1. It does not change YouTube automatically.
-2. It does not undo changes after they are applied.
-3. It does not guarantee that every suggested reorganization is correct.
-4. It does not auto queue broad category moves unless you explicitly opt in.
-
 ## Quick Start
 
-If you want the shortest path, do this:
+If you want the shortest working path:
 
 ```powershell
 pip install -r requirements.txt
@@ -54,97 +65,113 @@ python -m src.cli analyze
 python -m src.cli apply
 ```
 
-Then review these two files:
+Then review:
 
 1. `data/playlist-report.md`
 2. `data/playlist-plan.json`
+3. `data/playlist-review.csv`
 
-If the preview looks correct, request write access and apply:
+If the preview looks correct:
 
 ```powershell
 python -m src.cli auth --write WRITE
 python -m src.cli apply --confirm APPLY
 ```
 
-## Before You Start
+## Requirements
 
-You need these things:
+You need:
 
-1. Python 3.11 or newer installed on your computer.
-2. A Google account that owns the YouTube playlists you want to manage.
-3. A Google Cloud project with the YouTube Data API v3 enabled.
-4. An OAuth desktop credentials file named `client_secret.json` in the repo root.
+1. Python 3.11 or newer
+2. A Google account that owns the playlists
+3. A Google Cloud project with YouTube Data API v3 enabled
+4. OAuth desktop credentials saved as `client_secret.json`
 
-## Folder Overview
-
-These are the files and folders most users need to care about:
+## Repo Layout
 
 ```text
 youtube-playlist-organizer/
 |   .env.example
-|   client_secret.json          <- you add this
-|   token.json                  <- created after auth
+|   client_secret.json
+|   token.json
 |   README.md
 |   requirements.txt
+|   pytest.ini
+|
++---badges
+|       coverage.svg
+|
++---config
+|       playlist-rules.json
 |
 +---data
-|       playlist-plan.json      <- machine readable action plan
-|       playlist-report.md      <- human readable review report
-|       playlist_items.csv      <- exported video list
-|       playlists.csv           <- exported playlist list
-|       playlists.json          <- full export used by analyze
+|       playlist-plan.json
+|       playlist-report.md
+|       playlist-review.csv
+|       playlist_items.csv
+|       playlists.csv
+|       playlists.json
 |
-\---src
-        cli.py                  <- main command line entry point
++---scripts
+|       generate_coverage_badge.py
+|
++---src
+|   |   cli.py
+|   |
+|   +---analysis
+|   +---api
+|   +---auth
+|   +---export
+|   +---models
+|   \---webui
+|
++---tests
+|
+\---.github
+    \---workflows
+            ci.yml
 ```
 
 ## First Time Setup
 
-### 1. Open a terminal in this repo
+### 1. Open the repo
 
-Examples:
+Example:
 
 ```powershell
 cd "C:\Users\mick0\OneDrive\Documents\Code & Dev\GitHub\youtube-playlist-organizer"
 ```
 
-### 2. Install Python packages
-
-Run:
+### 2. Install dependencies
 
 ```powershell
 pip install -r requirements.txt
 ```
 
-If this fails, check that Python and `pip` are installed and available in your terminal.
+### 3. Create Google credentials
 
-### 3. Create Google API credentials
+You need `client_secret.json`.
 
-You need `client_secret.json` from Google.
+Steps:
 
-Do this:
+1. Open [Google Cloud Console](https://console.cloud.google.com)
+2. Create or select a project
+3. Open **APIs & Services**
+4. Open **Library**
+5. Enable **YouTube Data API v3**
+6. Open **OAuth consent screen** or **Google Auth Platform**
+7. Create the consent screen
+8. Add your Google account as a test user
+9. Create an OAuth client
+10. Choose **Desktop app**
+11. Download the JSON
+12. Save it in the repo root as `client_secret.json`
 
-1. Go to [Google Cloud Console](https://console.cloud.google.com).
-2. Create a project or select an existing project.
-3. Open **APIs & Services**.
-4. Open **Library**.
-5. Enable **YouTube Data API v3**.
-6. Open **OAuth consent screen** or **Google Auth Platform**.
-7. Create a consent screen.
-8. Add your Google account as a test user.
-9. Create an OAuth client.
-10. Choose **Desktop app**.
-11. Download the JSON file.
-12. Rename it to `client_secret.json` if needed.
-13. Place it in the root of this repo.
+If you skip the test user step, Google may block the auth flow.
 
-If you skip the test user step, Google may block the login flow.
+### 4. Optional `.env`
 
-### 4. Optional local config
-
-You usually do not need this step, but it is available.
-
-If you want a local `.env` file:
+If you want local overrides:
 
 ```powershell
 Copy-Item .env.example .env
@@ -159,128 +186,126 @@ TOKEN_FILE=token.json
 
 ## Main Workflow
 
-This is the normal order:
+The normal order is:
 
 1. Authenticate
 2. Export
 3. Analyze
 4. Review
-5. Preview
-6. Apply only if the plan is correct
+5. Preview apply
+6. Apply only if correct
 
-### Step 1. Authenticate in read only mode
-
-Run:
+### Step 1. Authenticate read only
 
 ```powershell
 python -m src.cli auth
 ```
 
-What this does:
+This:
 
-1. Opens a browser login flow.
-2. Lets you approve read only access to your YouTube account.
-3. Saves a local `token.json` file.
+1. Opens the browser auth flow
+2. Requests read only access
+3. Saves `token.json`
 
-Read only mode is enough for:
+Read only access is enough for:
 
 1. `list`
 2. `export`
 3. `analyze`
-4. `apply` preview mode
+4. `apply` preview
+5. `ui` until you choose live apply
 
-### Step 2. List your playlists
-
-This step is optional, but useful as a quick check.
-
-Run:
+### Step 2. Optional playlist list
 
 ```powershell
 python -m src.cli list
 ```
 
-What this does:
+This is just a quick terminal check that auth is working and playlists are visible.
 
-1. Connects to YouTube.
-2. Lists your playlists in the terminal.
-3. Shows the playlist names and counts.
-
-### Step 3. Export your playlists
-
-Run:
+### Step 3. Export playlists
 
 ```powershell
 python -m src.cli export
 ```
 
-What this does:
-
-1. Downloads all your playlists.
-2. Downloads all playlist items.
-3. Saves the results into the `data` folder.
-
-Files created:
+This writes:
 
 1. `data/playlists.json`
 2. `data/playlists.csv`
 3. `data/playlist_items.csv`
 
-What each file is for:
+Use cases:
 
-1. `playlists.json` is the main input for analysis.
-2. `playlists.csv` is a simple spreadsheet style playlist summary.
-3. `playlist_items.csv` is a flat list of all playlist items.
+1. `playlists.json` is the main analysis input
+2. `playlists.csv` is a simple playlist summary
+3. `playlist_items.csv` is a flat per item export
 
-### Step 4. Analyze your playlists
-
-Run:
+### Step 4. Analyze playlists
 
 ```powershell
 python -m src.cli analyze
 ```
 
-What this does:
+This:
 
-1. Reads `data/playlists.json`.
-2. Finds duplicate videos across playlists.
-3. Finds deleted video entries.
-4. Finds duplicate titled playlists that can be merged.
-5. Generates review only reorganization suggestions.
-6. Writes output files for review.
+1. Reads `data/playlists.json`
+2. Detects duplicate videos
+3. Detects deleted entries
+4. Detects duplicate or aliased playlist titles for merge review
+5. Generates suggested category moves
+6. Writes review artifacts
 
-Files created:
+Files written:
 
 1. `data/playlist-plan.json`
 2. `data/playlist-report.md`
+3. `data/playlist-review.csv`
 
-What each file is for:
+### Step 4a. Review the rule config
 
-1. `playlist-plan.json` is the action plan used by `apply`.
-2. `playlist-report.md` is the review document meant for humans.
+The current behavior is driven by:
 
-### Step 5. Review the proposed changes
+`config/playlist-rules.json`
 
-This is the most important safety step.
+This config currently controls:
 
-Open and read:
+1. `privacy_defaults`
+2. `keep_rules`
+3. `playlist_merge_preferences`
+4. `playlist_aliases`
+5. `token_aliases`
+6. `category_rules`
+
+That means you can change:
+
+1. Default privacy for created playlists
+2. Which playlist titles are preferred when duplicates are kept
+3. Privacy preference order for duplicate keep decisions
+4. Merge behavior for aliased playlist names
+5. Category matching rules
+
+YAML is also supported:
+
+```powershell
+python -m src.cli analyze --rules-config config/playlist-rules.yaml
+```
+
+### Step 5. Review the outputs
+
+Read these before any live apply:
 
 1. `data/playlist-report.md`
 2. `data/playlist-plan.json`
+3. `data/playlist-review.csv`
 
-The report explains:
+What each is for:
 
-1. What the safe plan will do automatically.
-2. Which broader reorganization ideas are only suggestions.
-3. Which playlist pairs may need manual review because they overlap.
+1. `playlist-report.md` is the human readable review summary
+2. `playlist-plan.json` is the machine readable plan used by `apply`
+3. `playlist-review.csv` is the spreadsheet friendly review export
 
-Important:
-
-1. The default plan is conservative.
-2. Broad category moves are not included in the apply plan unless you opt in.
-
-### Step 6. Preview the apply plan in the terminal
-
-Run:
+### Step 6. Preview apply
 
 ```powershell
 python -m src.cli apply
@@ -288,96 +313,105 @@ python -m src.cli apply
 
 This is still a dry run.
 
-What it does:
+It:
 
-1. Loads `data/playlist-plan.json`.
-2. Shows how many actions are planned.
-3. Estimates quota cost.
-4. Prints a preview table.
-5. Makes no live changes.
+1. Reads the plan
+2. Shows action counts
+3. Estimates quota cost
+4. Prints a preview table
+5. Makes no live changes
 
-If the output is wrong, stop here and do not apply.
+### Step 7. Authenticate write access
 
-### Step 7. Authenticate with write access
-
-Only do this when you are ready to make live changes.
-
-Run:
+Only do this when you are ready for live YouTube writes.
 
 ```powershell
 python -m src.cli auth --write WRITE
 ```
 
-What this does:
-
-1. Requests YouTube write access.
-2. Replaces or refreshes the local token so apply can make changes.
-
-If it still behaves like read only access:
+If write access still fails:
 
 1. Delete `token.json`
-2. Run `python -m src.cli auth --write WRITE` again
+2. Run the write auth command again
 
-### Step 8. Apply the plan for real
-
-Run:
+### Step 8. Apply for real
 
 ```powershell
 python -m src.cli apply --confirm APPLY
 ```
 
-This is the command that makes live YouTube changes.
+This can:
 
-It can:
+1. Remove duplicate playlist items
+2. Remove deleted entries
+3. Merge duplicate or aliased playlists
+4. Optionally move videos into more specific playlists if you included category moves in the plan
 
-1. Remove duplicate playlist items.
-2. Remove deleted video entries.
-3. Merge playlists with the same title.
+## Local Web UI
+
+If you do not want to use the terminal, start the local web UI:
+
+```powershell
+python -m src.cli ui
+```
+
+Default URL:
+
+`http://127.0.0.1:8765`
+
+UI features:
+
+1. Read only auth
+2. Write auth
+3. Export
+4. Analyze
+5. Apply preview
+6. Confirmed live apply
+7. Open generated review files
+8. Download the plan, report, and review CSV
+9. Group suggested moves by source and target playlist
+10. Group overlap review into useful sections
+11. Inline filtering for move and overlap review rows
+
+Useful options:
+
+```powershell
+python -m src.cli ui --port 9000
+python -m src.cli ui --no-browser
+```
 
 ## Optional Aggressive Reorganization Mode
 
-By default, broad category based moves are review only.
+By default, category moves stay out of the apply plan.
 
-If you want the tool to include those moves in the apply plan, run:
+If you want them included:
 
 ```powershell
 python -m src.cli analyze --include-category-moves
 ```
 
-Use this only after reviewing the report and deciding the suggestions are good enough.
+Use this only after review.
 
-When enabled, the apply plan may also include:
+When enabled, the apply plan may include:
 
 1. `move_to_playlist`
 2. `create_playlist`
 
-That means the tool may:
-
-1. Move videos from broad playlists into more specific ones.
-2. Create destination playlists if they do not exist.
-
 ## Safe Default Behavior
 
-If you run the normal workflow without extra flags:
+If you do not pass extra flags:
 
-1. `analyze` creates a safe plan.
-2. Suggested category moves stay in the report only.
-3. `apply` previews only.
-4. `apply --confirm APPLY` performs only the safe plan actions.
+1. `analyze` builds a conservative plan
+2. Suggested category moves stay in the review outputs
+3. `apply` remains preview only
+4. `apply --confirm APPLY` only performs the queued safe actions
 
 ## Command Reference
 
 ### `auth`
 
-Read only auth:
-
 ```powershell
 python -m src.cli auth
-```
-
-Write auth:
-
-```powershell
 python -m src.cli auth --write WRITE
 ```
 
@@ -391,103 +425,46 @@ python -m src.cli list
 
 ```powershell
 python -m src.cli export
-```
-
-Custom output directory:
-
-```powershell
 python -m src.cli export --output-dir data
 ```
 
 ### `analyze`
 
-Default safe analysis:
-
 ```powershell
 python -m src.cli analyze
-```
-
-Include category moves:
-
-```powershell
 python -m src.cli analyze --include-category-moves
-```
-
-Custom input and output files:
-
-```powershell
-python -m src.cli analyze --input-json data/playlists.json --plan-output data/playlist-plan.json --report-output data/playlist-report.md
+python -m src.cli analyze --rules-config config/playlist-rules.json
+python -m src.cli analyze --input-json data/playlists.json --plan-output data/playlist-plan.json --report-output data/playlist-report.md --review-csv-output data/playlist-review.csv
 ```
 
 ### `apply`
 
-Preview only:
-
 ```powershell
 python -m src.cli apply
-```
-
-Real apply:
-
-```powershell
 python -m src.cli apply --confirm APPLY
 ```
 
-## What Gets Written To Disk
+### `ui`
+
+```powershell
+python -m src.cli ui
+```
+
+## Current Output Files
 
 Local auth files:
 
 1. `client_secret.json`
 2. `token.json`
 
-Export and analysis files:
+Export and review files:
 
 1. `data/playlists.json`
 2. `data/playlists.csv`
 3. `data/playlist_items.csv`
 4. `data/playlist-plan.json`
 5. `data/playlist-report.md`
-
-## Understanding the Output Files
-
-### `data/playlists.json`
-
-Full exported playlist data.
-
-Use it when:
-
-1. You want the raw source data.
-2. You want to re run analysis without exporting again.
-
-### `data/playlists.csv`
-
-One row per playlist.
-
-Use it when:
-
-1. You want a simple summary.
-2. You want to sort playlists in Excel.
-
-### `data/playlist_items.csv`
-
-One row per playlist item.
-
-Use it when:
-
-1. You want a flat spreadsheet of every saved video.
-2. You want to inspect titles, playlist names, and positions.
-
-### `data/playlist-plan.json`
-
-Machine readable action plan.
-
-This is the file `apply` uses.
-
-### `data/playlist-report.md`
-
-Human readable review report.
-
-This is the file you should read before applying changes.
+6. `data/playlist-review.csv`
 
 ## Current Action Types
 
@@ -497,87 +474,95 @@ Default safe actions:
 2. `remove_deleted`
 3. `merge_playlist`
 
-Optional actions when category moves are enabled:
+Optional actions if category moves are enabled:
 
 1. `move_to_playlist`
 2. `create_playlist`
 
-## Quota and Cost Notes
+## Tests and CI
 
-The YouTube Data API uses quota units.
+Local validation:
 
-This matters because very large cleanup plans can hit the daily quota limit.
+```powershell
+python -m ruff check src tests scripts
+python -m pytest
+```
+
+CI currently does all of this:
+
+1. Runs on push
+2. Runs on pull request
+3. Uses pip caching
+4. Runs `ruff`
+5. Runs `pytest` with coverage
+6. Produces coverage XML and HTML
+7. Uploads coverage artifacts
+8. Generates `badges/coverage.svg`
+9. Publishes the badge on the default branch
+10. Writes a CI status summary that names the broken step directly if something fails
+
+## Quota Notes
+
+YouTube Data API quota is the main operational limit.
 
 Typical costs:
 
-1. `playlists.list` costs 1 unit.
-2. `playlistItems.list` costs 1 unit.
-3. `playlistItems.insert` costs 50 units.
-4. `playlistItems.delete` costs 50 units.
-5. `playlists.insert` costs 50 units.
-6. `playlists.delete` costs 50 units.
+1. `playlists.list` costs 1 unit
+2. `playlistItems.list` costs 1 unit
+3. `playlistItems.insert` costs 50 units
+4. `playlistItems.delete` costs 50 units
+5. `playlists.insert` costs 50 units
+6. `playlists.delete` costs 50 units
 
 Practical meaning:
 
-1. Removing one playlist item costs 50 units.
-2. Moving one video usually costs about 100 units.
-3. Deleting one merged duplicate playlist costs 50 units.
+1. Removing one playlist item costs 50 units
+2. Moving one video is usually about 100 units
+3. Deleting a merged duplicate playlist costs 50 units
 
-Always run the dry run preview first so you can see the estimated quota cost.
+Always preview before live apply.
 
-## Safety Rules
+## Troubleshooting
 
-Follow these rules every time:
-
-1. Export before analyzing.
-2. Analyze before applying.
-3. Read `data/playlist-report.md`.
-4. Run `python -m src.cli apply` before any real apply.
-5. Do not run `apply --confirm APPLY` unless the plan looks correct.
-
-There is no built in undo.
-
-## Common Problems
-
-### Problem: `Not found: client_secret.json`
+### Missing `client_secret.json`
 
 Cause:
 
-The Google OAuth credentials file is missing.
+The OAuth credentials file is missing.
 
 Fix:
 
-1. Download the desktop OAuth credentials JSON from Google Cloud.
-2. Save it as `client_secret.json` in the repo root.
+1. Download the Google desktop OAuth credentials JSON
+2. Save it as `client_secret.json` in the repo root
 
-### Problem: Google says the app is blocked or unverified
+### Google blocks or warns on auth
 
 Cause:
 
-Your Google account is not listed as a test user in the Google Cloud project.
+Your Google account is not a configured test user.
 
 Fix:
 
-1. Open the OAuth consent screen settings.
-2. Add your Google account as a test user.
-3. Run auth again.
+1. Open the OAuth consent screen settings
+2. Add your Google account as a test user
+3. Run auth again
 
-### Problem: `apply` fails because the token is read only
+### `apply` still behaves as read only
 
 Cause:
 
-You authenticated in read only mode first.
+The saved token does not have write scope.
 
 Fix:
 
 1. Delete `token.json`
 2. Run `python -m src.cli auth --write WRITE`
 
-### Problem: `ModuleNotFoundError`
+### `ModuleNotFoundError`
 
 Cause:
 
-Required Python packages are not installed.
+Dependencies are missing.
 
 Fix:
 
@@ -585,30 +570,30 @@ Fix:
 pip install -r requirements.txt
 ```
 
-### Problem: `quotaExceeded`
+### `quotaExceeded`
 
 Cause:
 
-The YouTube API daily quota was exhausted.
+The daily YouTube API quota was used up.
 
 Fix:
 
-1. Stop the run.
-2. Wait for quota reset.
-3. Export again.
-4. Analyze again.
-5. Review again.
+1. Stop the run
+2. Wait for quota reset
+3. Export again
+4. Analyze again
+5. Review again
 
-## Example Beginner Workflow
+## Beginner Checklist
 
-If you want a plain checklist, use this:
+If you want the simplest checklist:
 
-1. Put `client_secret.json` in the repo root.
+1. Put `client_secret.json` in the repo root
 2. Run `pip install -r requirements.txt`
 3. Run `python -m src.cli auth`
 4. Run `python -m src.cli export`
 5. Run `python -m src.cli analyze`
-6. Open `data/playlist-report.md`
+6. Read `data/playlist-report.md`
 7. Run `python -m src.cli apply`
 8. If the preview looks right, run `python -m src.cli auth --write WRITE`
 9. Run `python -m src.cli apply --confirm APPLY`

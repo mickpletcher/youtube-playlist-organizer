@@ -1,0 +1,108 @@
+name: CI
+
+permissions:
+  contents: write
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Ruff
+        id: ruff
+        continue-on-error: true
+        run: ruff check src tests
+
+      - name: Run tests with coverage
+        id: pytest
+        continue-on-error: true
+        run: pytest --cov=src --cov-report=term-missing --cov-report=xml --cov-report=html
+
+      - name: Generate coverage badge
+        id: coverage_badge
+        if: steps.pytest.outcome == 'success'
+        continue-on-error: true
+        run: python scripts/generate_coverage_badge.py coverage.xml badges/coverage.svg
+
+      - name: Write coverage summary
+        if: steps.pytest.outcome == 'success'
+        shell: python
+        run: |
+          import xml.etree.ElementTree as ET
+          root = ET.parse("coverage.xml").getroot()
+          rate = float(root.attrib.get("line-rate", "0")) * 100
+          with open("${{ github.step_summary }}", "a", encoding="utf-8") as handle:
+              handle.write(f"## Coverage\n\nLine coverage: **{rate:.1f}%**\n")
+
+      - name: Upload coverage artifacts
+        if: steps.pytest.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-artifacts
+          path: |
+            coverage.xml
+            htmlcov
+            badges/coverage.svg
+
+      - name: Write CI status summary
+        if: always()
+        shell: python
+        env:
+          RUFF_OUTCOME: ${{ steps.ruff.outcome }}
+          PYTEST_OUTCOME: ${{ steps.pytest.outcome }}
+          BADGE_OUTCOME: ${{ steps.coverage_badge.outcome }}
+        run: |
+          failures = []
+          if "${{ steps.ruff.outcome }}" != "success":
+              failures.append(("Ruff", "Linting failed. Run `python -m ruff check src tests scripts` locally."))
+          if "${{ steps.pytest.outcome }}" != "success":
+              failures.append(("Pytest", "Tests or coverage failed. Run `python -m pytest` locally."))
+          if "${{ steps.coverage_badge.outcome }}" not in ("success", "skipped", ""):
+              failures.append(("Coverage Badge", "Badge generation failed. Run `python scripts/generate_coverage_badge.py coverage.xml badges/coverage.svg`."))
+
+          with open("${{ github.step_summary }}", "a", encoding="utf-8") as handle:
+              handle.write("## CI Status Summary\n\n")
+              if failures:
+                  for name, message in failures:
+                      handle.write(f"- Broken step: **{name}**. {message}\n")
+              else:
+                  handle.write("- All CI steps passed.\n")
+
+      - name: Fail job if any required step failed
+        if: always()
+        shell: python
+        run: |
+          import sys
+          failed = any(
+              outcome != "success"
+              for outcome in (
+                  "${{ steps.ruff.outcome }}",
+                  "${{ steps.pytest.outcome }}",
+              )
+          )
+          sys.exit(1 if failed else 0)
+
+      - name: Publish coverage badge
+        if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch && steps.pytest.outcome == 'success' && steps.coverage_badge.outcome == 'success'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Update coverage badge [skip ci]"
+          file_pattern: badges/coverage.svg

@@ -23,6 +23,58 @@ def get_playlists(client) -> list[Playlist]:
     return playlists
 
 
+def get_playlist_by_id(client, playlist_id: str) -> Playlist | None:
+    response = client.playlists().list(
+        part="snippet,contentDetails,status",
+        id=playlist_id,
+        maxResults=1,
+    ).execute()
+    items = response.get("items", [])
+    if not items:
+        return None
+
+    item = items[0]
+    return Playlist(
+        id=item["id"],
+        title=item["snippet"]["title"],
+        description=item["snippet"].get("description", ""),
+        item_count=item["contentDetails"]["itemCount"],
+        privacy=item["status"]["privacyStatus"],
+    )
+
+
+def get_liked_playlist(client) -> Playlist | None:
+    response = client.channels().list(
+        part="contentDetails",
+        mine=True,
+        maxResults=1,
+    ).execute()
+    items = response.get("items", [])
+    if not items:
+        return None
+
+    liked_playlist_id = (
+        items[0]
+        .get("contentDetails", {})
+        .get("relatedPlaylists", {})
+        .get("likes")
+    )
+    if not liked_playlist_id:
+        return None
+
+    playlist = get_playlist_by_id(client, liked_playlist_id)
+    if playlist:
+        return playlist
+
+    return Playlist(
+        id=liked_playlist_id,
+        title="Liked videos",
+        description="",
+        item_count=0,
+        privacy="private",
+    )
+
+
 def get_playlist_items(client, playlist_id: str) -> list[PlaylistItem]:
     items = []
     request = client.playlistItems().list(
