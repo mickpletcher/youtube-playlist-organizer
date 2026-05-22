@@ -7,6 +7,9 @@
 1. Updated ignore rules so `future-upgrades.md` is not committed.
 2. Verified `token.json` is already ignored and not tracked.
 3. Added `prompts/` to ignore rules to prevent prompt files from future commits.
+4. Updated dependency pins to avoid resolver conflicts by requiring `pydantic>=2.11.0,<3` and `rich>=14.2.0,<15`.
+5. Bumped `pandas` to `2.2.3` so dependency installs on Python 3.13 can use prebuilt wheels.
+6. Fixed OAuth refresh handling to recover from `invalid_scope` by forcing clean reauth and by validating token scope coverage before reuse.
 
 ### Analyzer and planning
 
