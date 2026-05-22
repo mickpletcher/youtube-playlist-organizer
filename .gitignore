@@ -1,3 +1,16 @@
+# VS Code workspace file
+*.code-workspace
+prompts/
+
+# Local secrets and exported playlist data
+client_secret.json
+token.json
+future-upgrades.md
+data/*.json
+data/*.csv
+data/*.md
+!data/.gitkeep
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
