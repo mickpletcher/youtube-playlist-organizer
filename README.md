@@ -519,8 +519,26 @@ Practical meaning:
 1. Removing one playlist item costs 50 units
 2. Moving one video is usually about 100 units
 3. Deleting a merged duplicate playlist costs 50 units
+4. Reordering an item inside the same playlist costs 50 units with `playlistItems.update`
 
 Always preview before live apply.
+
+There is no clean way to bypass YouTube API quota when reorganizing videos.
+
+Best options:
+
+1. Chunk the work with `--max-quota-cost`
+2. Re-export after every live chunk
+3. Re-analyze after every export
+4. Apply the next reviewed chunk
+5. Request more quota in Google Cloud if this becomes a repeated workflow
+6. Use the YouTube web UI manually for a large one-time cleanup if API quota is the blocker
+
+Avoid these shortcuts:
+
+1. Do not rotate API keys or Google Cloud projects just to dodge quota
+2. Do not rerun an old plan after a partial apply
+3. Do not browser automate YouTube unless there is no API option left
 
 For large plans, apply a small chunk:
 
