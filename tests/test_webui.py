@@ -16,6 +16,33 @@ def test_build_cli_command_for_analyze_with_category_moves():
     assert "--include-category-moves" in command
 
 
+def test_build_cli_command_for_analyze_filters():
+    command = build_cli_command(
+        {
+            "action": "analyze",
+            "rules_config": "config/playlist-rules.json",
+            "only_deleted": "on",
+            "only_category_suggestions": "on",
+        }
+    )
+
+    assert "--only-deleted" in command
+    assert "--only-category-suggestions" in command
+
+
+def test_build_cli_command_for_validate_and_save_decisions():
+    validate_command = build_cli_command(
+        {
+            "action": "validate_config",
+            "rules_config": "config/playlist-rules.json",
+        }
+    )
+    save_command = build_cli_command({"action": "save_decisions"})
+
+    assert validate_command[3] == "validate-config"
+    assert save_command[3] == "save-decisions"
+
+
 def test_build_cli_command_rejects_live_apply_without_confirmation():
     try:
         build_cli_command({"action": "apply_live", "confirm_text": "NOPE"})

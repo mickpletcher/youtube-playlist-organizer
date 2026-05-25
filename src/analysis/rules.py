@@ -24,6 +24,12 @@ DEFAULT_RULES_CONFIG = {
         "prefer_private_target": True,
         "canonical_playlist_strategy": "largest_first",
     },
+    "category_suggestion_filters": {
+        "source_playlist_allowlist": [],
+        "source_playlist_blocklist": [],
+        "target_playlist_allowlist": [],
+        "target_playlist_blocklist": [],
+    },
     "liked_video_review": {
         "enabled": True,
         "liked_playlist_titles": ["Liked videos", "Liked Videos"],
@@ -200,6 +206,14 @@ def get_liked_video_review_config(config: dict[str, Any] | None = None) -> dict[
     return config.get("liked_video_review", DEFAULT_RULES_CONFIG["liked_video_review"])
 
 
+def get_category_suggestion_filters(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    config = config or DEFAULT_RULES_CONFIG
+    return config.get(
+        "category_suggestion_filters",
+        DEFAULT_RULES_CONFIG["category_suggestion_filters"],
+    )
+
+
 def _load_rules_file(path: Path) -> dict[str, Any]:
     suffix = path.suffix.lower()
     text = path.read_text(encoding="utf-8")
@@ -281,6 +295,109 @@ def match_keyword_sets(title: str, rule: dict[str, Any]) -> list[list[str]]:
     return matches
 
 
+def match_weighted_negative_keyword_sets(title: str, rule: dict[str, Any]) -> list[dict[str, Any]]:
+    lowered = title.lower()
+    matches = []
+    for negative_rule in rule.get("negative_keyword_sets", []):
+        if isinstance(negative_rule, dict):
+            keyword_set = negative_rule.get("keywords", [])
+            weight = int(negative_rule.get("weight", 25))
+            reason = negative_rule.get("reason", "negative keyword match")
+        else:
+            keyword_set = negative_rule
+            weight = 25
+            reason = "negative keyword match"
+
+        if keyword_set and all(keyword.lower() in lowered for keyword in keyword_set):
+            matches.append(
+                {
+                    "keywords": keyword_set,
+                    "weight": weight,
+                    "reason": reason,
+                }
+            )
+    return matches
+
+
+def playlist_is_allowed_by_filters(
+    title: str,
+    allowlist: list[str],
+    blocklist: list[str],
+) -> bool:
+    normalized_title = normalize_key(title)
+    normalized_allowlist = {normalize_key(value) for value in allowlist if value.strip()}
+    normalized_blocklist = {normalize_key(value) for value in blocklist if value.strip()}
+    if normalized_title in normalized_blocklist:
+        return False
+    return not normalized_allowlist or normalized_title in normalized_allowlist
+
+
+def validate_rules_config(config: dict[str, Any]) -> list[str]:
+    errors = []
+    if not isinstance(config, dict):
+        return ["Rules config must be a JSON or YAML object."]
+
+    privacy = get_privacy_defaults(config).get("created_playlist_privacy", "private")
+    if privacy not in {"private", "unlisted", "public"}:
+        errors.append("privacy_defaults.created_playlist_privacy must be private, unlisted, or public.")
+
+    merge_strategy = get_merge_preferences(config).get("canonical_playlist_strategy", "largest_first")
+    if merge_strategy not in {"largest_first"}:
+        errors.append("playlist_merge_preferences.canonical_playlist_strategy must be largest_first.")
+
+    keep_rules = get_keep_rules(config)
+    if not isinstance(keep_rules.get("preferred_playlist_titles", []), list):
+        errors.append("keep_rules.preferred_playlist_titles must be a list.")
+    privacy_order = keep_rules.get("preferred_privacy_order", [])
+    if not isinstance(privacy_order, list):
+        errors.append("keep_rules.preferred_privacy_order must be a list.")
+    else:
+        invalid_privacy = [value for value in privacy_order if value not in {"private", "unlisted", "public"}]
+        if invalid_privacy:
+            errors.append("keep_rules.preferred_privacy_order contains invalid privacy values.")
+
+    for section_name in ["playlist_aliases", "token_aliases"]:
+        if not isinstance(config.get(section_name, {}), dict):
+            errors.append(f"{section_name} must be an object.")
+
+    category_filters = get_category_suggestion_filters(config)
+    for field in [
+        "source_playlist_allowlist",
+        "source_playlist_blocklist",
+        "target_playlist_allowlist",
+        "target_playlist_blocklist",
+    ]:
+        if not isinstance(category_filters.get(field, []), list) or not all(
+            isinstance(value, str) for value in category_filters.get(field, [])
+        ):
+            errors.append(f"category_suggestion_filters.{field} must be a list of strings.")
+
+    for index, rule in enumerate(config.get("category_rules", []), 1):
+        prefix = f"category_rules[{index}]"
+        if not isinstance(rule.get("source_playlists", []), list) or not rule.get("source_playlists"):
+            errors.append(f"{prefix}.source_playlists must be a non empty list.")
+        if not isinstance(rule.get("target_playlist", ""), str) or not rule.get("target_playlist", "").strip():
+            errors.append(f"{prefix}.target_playlist must be a non empty string.")
+        if not isinstance(rule.get("keyword_sets", []), list) or not rule.get("keyword_sets"):
+            errors.append(f"{prefix}.keyword_sets must be a non empty list.")
+        for set_index, keyword_set in enumerate(rule.get("keyword_sets", []), 1):
+            if not isinstance(keyword_set, list) or not all(isinstance(keyword, str) for keyword in keyword_set):
+                errors.append(f"{prefix}.keyword_sets[{set_index}] must be a list of strings.")
+        for set_index, negative_rule in enumerate(rule.get("negative_keyword_sets", []), 1):
+            if isinstance(negative_rule, dict):
+                keyword_set = negative_rule.get("keywords", [])
+                weight = negative_rule.get("weight", 25)
+            else:
+                keyword_set = negative_rule
+                weight = 25
+            if not isinstance(keyword_set, list) or not all(isinstance(keyword, str) for keyword in keyword_set):
+                errors.append(f"{prefix}.negative_keyword_sets[{set_index}] keywords must be a list of strings.")
+            if not isinstance(weight, int) or weight < 1 or weight > 100:
+                errors.append(f"{prefix}.negative_keyword_sets[{set_index}] weight must be an integer from 1 to 100.")
+
+    return errors
+
+
 def score_liked_video_flag(
     matched_keyword_sets: list[list[str]],
     severity: str,
@@ -359,6 +476,7 @@ def score_move_confidence(
     source_title: str,
     target_title: str,
     matched_keyword_sets: list[list[str]],
+    negative_matches: list[dict[str, Any]],
     target_exists: bool,
 ) -> tuple[int, str, list[str]]:
     score = 45
@@ -370,6 +488,13 @@ def score_move_confidence(
         score += keyword_score
         flattened_keywords = sorted({keyword for keyword_set in matched_keyword_sets for keyword in keyword_set})
         reasons.append(f"matched keywords: {', '.join(flattened_keywords)}")
+
+    for negative_match in negative_matches:
+        score -= negative_match["weight"]
+        reasons.append(
+            f"negative keywords: {', '.join(negative_match['keywords'])} "
+            f"(-{negative_match['weight']}, {negative_match['reason']})"
+        )
 
     if target_exists:
         score += 10
@@ -404,10 +529,17 @@ def find_category_moves(
 ) -> list[dict[str, Any]]:
     config = config or DEFAULT_RULES_CONFIG
     playlist_lookup, normalized_lookup = build_lookup(playlists_data, config)
+    category_filters = get_category_suggestion_filters(config)
     moves = []
 
     for rule in config.get("category_rules", []):
         source_playlists = rule.get("source_playlists", [])
+        if not playlist_is_allowed_by_filters(
+            rule["target_playlist"],
+            category_filters.get("target_playlist_allowlist", []),
+            category_filters.get("target_playlist_blocklist", []),
+        ):
+            continue
         target_candidates = normalized_lookup.get(
             normalize_playlist_title(rule["target_playlist"], config),
             [],
@@ -416,6 +548,12 @@ def find_category_moves(
         target_video_ids = build_target_video_ids(target)
 
         for source_title in source_playlists:
+            if not playlist_is_allowed_by_filters(
+                source_title,
+                category_filters.get("source_playlist_allowlist", []),
+                category_filters.get("source_playlist_blocklist", []),
+            ):
+                continue
             source = playlist_lookup.get(source_title)
             if not source:
                 continue
@@ -424,6 +562,7 @@ def find_category_moves(
                 matched_keyword_sets = match_keyword_sets(item.get("title", ""), rule)
                 if not matched_keyword_sets:
                     continue
+                negative_matches = match_weighted_negative_keyword_sets(item.get("title", ""), rule)
                 if item["video_id"] in target_video_ids:
                     continue
 
@@ -432,8 +571,11 @@ def find_category_moves(
                     source_title=source["title"],
                     target_title=rule["target_playlist"],
                     matched_keyword_sets=matched_keyword_sets,
+                    negative_matches=negative_matches,
                     target_exists=target is not None,
                 )
+                if confidence_score < int(rule.get("minimum_confidence", 50)):
+                    continue
 
                 moves.append(
                     {
@@ -454,6 +596,7 @@ def find_category_moves(
                         },
                         "rule": rule["reason"],
                         "matched_keyword_sets": matched_keyword_sets,
+                        "negative_keyword_matches": negative_matches,
                         "confidence_score": confidence_score,
                         "confidence_label": confidence_label,
                         "confidence_reasons": confidence_reasons,

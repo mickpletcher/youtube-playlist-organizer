@@ -255,12 +255,16 @@ This:
 4. Detects duplicate or aliased playlist titles for merge review
 5. Generates suggested category moves
 6. Writes review artifacts
+7. Applies saved approved and rejected review decisions
+8. Writes an optional HTML report for browser based review
 
 Files written:
 
 1. `data/playlist-plan.json`
 2. `data/playlist-report.md`
 3. `data/playlist-review.csv`
+4. `data/playlist-move-review.md`
+5. `data/playlist-report.html`
 
 ### Step 4a. Review the rule config
 
@@ -284,6 +288,14 @@ That means you can change:
 3. Privacy preference order for duplicate keep decisions
 4. Merge behavior for aliased playlist names
 5. Category matching rules
+6. Weighted negative keywords for broad category rules
+7. Source and target playlist allowlists or blocklists for category suggestions
+
+Validate config before analysis:
+
+```powershell
+python -m src.cli validate-config
+```
 
 YAML is also supported:
 
@@ -298,12 +310,53 @@ Read these before any live apply:
 1. `data/playlist-report.md`
 2. `data/playlist-plan.json`
 3. `data/playlist-review.csv`
+4. `data/playlist-move-review.md`
 
 What each is for:
 
 1. `playlist-report.md` is the human readable review summary
 2. `playlist-plan.json` is the machine readable plan used by `apply`
 3. `playlist-review.csv` is the spreadsheet friendly review export
+4. `playlist-move-review.md` is grouped by source and target playlist for category move review
+5. `playlist-report.html` is a browser friendly report for non terminal review
+
+The review CSV includes:
+
+1. `decision_key`
+2. `review_status`
+
+Use `review_status` to mark rows as:
+
+1. `approved`
+2. `rejected`
+3. `undecided`
+
+### Step 5a. Save review decisions
+
+After editing `data/playlist-review.csv`, save approved and rejected decisions:
+
+```powershell
+python -m src.cli save-decisions
+```
+
+Or approve or reject one row by decision key:
+
+```powershell
+python -m src.cli decide --decision-key DECISION_KEY --review-status approved
+python -m src.cli decide --decision-key DECISION_KEY --review-status rejected
+```
+
+This writes:
+
+`data/review-decisions.json`
+
+Future `analyze` runs load that file by default.
+
+Decision behavior:
+
+1. Approved category moves are queued in future plans
+2. Rejected category moves are skipped in future plans
+3. Undecided rows are not saved
 
 ### Step 6. Preview apply
 
@@ -347,6 +400,10 @@ This can:
 3. Merge duplicate or aliased playlists
 4. Optionally move videos into more specific playlists if you included category moves in the plan
 
+Before a confirmed live apply, the tool writes a local rollback snapshot under:
+
+`data/snapshots/`
+
 ## Local Web UI
 
 If you do not want to use the terminal, start the local web UI:
@@ -372,6 +429,7 @@ UI features:
 9. Group suggested moves by source and target playlist
 10. Group overlap review into useful sections
 11. Inline filtering for move and overlap review rows
+12. Collapse large review groups so the page stays usable with large datasets
 
 Useful options:
 
@@ -433,8 +491,41 @@ python -m src.cli export --output-dir data
 ```powershell
 python -m src.cli analyze
 python -m src.cli analyze --include-category-moves
+python -m src.cli analyze --only-duplicates
+python -m src.cli analyze --only-deleted
+python -m src.cli analyze --only-merges
+python -m src.cli analyze --only-category-suggestions
 python -m src.cli analyze --rules-config config/playlist-rules.json
-python -m src.cli analyze --input-json data/playlists.json --plan-output data/playlist-plan.json --report-output data/playlist-report.md --review-csv-output data/playlist-review.csv
+python -m src.cli analyze --decisions-file data/review-decisions.json
+python -m src.cli analyze --input-json data/playlists.json --plan-output data/playlist-plan.json --report-output data/playlist-report.md --review-csv-output data/playlist-review.csv --html-report-output data/playlist-report.html
+```
+
+### `validate-config`
+
+```powershell
+python -m src.cli validate-config
+python -m src.cli validate-config --rules-config config/playlist-rules.json
+```
+
+### `plan-summary`
+
+```powershell
+python -m src.cli plan-summary
+python -m src.cli plan-summary --plan-path data/playlist-plan.json
+```
+
+### `save-decisions`
+
+```powershell
+python -m src.cli save-decisions
+python -m src.cli save-decisions --review-csv data/playlist-review.csv --decisions-output data/review-decisions.json
+```
+
+### `decide`
+
+```powershell
+python -m src.cli decide --decision-key DECISION_KEY --review-status approved
+python -m src.cli decide --decision-key DECISION_KEY --review-status rejected
 ```
 
 ### `apply`
@@ -442,6 +533,7 @@ python -m src.cli analyze --input-json data/playlists.json --plan-output data/pl
 ```powershell
 python -m src.cli apply
 python -m src.cli apply --confirm APPLY
+python -m src.cli apply --confirm APPLY --skip-rollback-snapshot
 ```
 
 ### `ui`
@@ -465,6 +557,10 @@ Export and review files:
 4. `data/playlist-plan.json`
 5. `data/playlist-report.md`
 6. `data/playlist-review.csv`
+7. `data/review-decisions.json`
+8. `data/playlist-move-review.md`
+9. `data/playlist-report.html`
+10. `data/snapshots/`
 
 ## Current Action Types
 

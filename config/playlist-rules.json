@@ -10,6 +10,12 @@
     "prefer_private_target": true,
     "canonical_playlist_strategy": "largest_first"
   },
+  "category_suggestion_filters": {
+    "source_playlist_allowlist": [],
+    "source_playlist_blocklist": ["Liked videos", "Favorites"],
+    "target_playlist_allowlist": [],
+    "target_playlist_blocklist": []
+  },
   "liked_video_review": {
     "enabled": true,
     "liked_playlist_titles": ["Liked videos", "Liked Videos"],
@@ -64,12 +70,26 @@
       "source_playlists": ["AI", "Tech"],
       "target_playlist": "ChatGPT",
       "keyword_sets": [["chatgpt"], ["openai"], ["custom gpt"], ["gpt"]],
+      "negative_keyword_sets": [
+        {
+          "keywords": ["gpt", "partition"],
+          "weight": 60,
+          "reason": "GPT can refer to disk partitioning instead of AI."
+        }
+      ],
       "reason": "ChatGPT and OpenAI content should live in ChatGPT."
     },
     {
       "source_playlists": ["AI", "Tech"],
       "target_playlist": "Prompt Engineering",
       "keyword_sets": [["prompt"], ["prompts"]],
+      "negative_keyword_sets": [
+        {
+          "keywords": ["command prompt"],
+          "weight": 60,
+          "reason": "Command Prompt content belongs with Windows or automation, not prompt engineering."
+        }
+      ],
       "reason": "Prompt specific content should live in Prompt Engineering."
     },
     {

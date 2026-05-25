@@ -1,5 +1,46 @@
 # Changelogs
 
+## 2026-05-25
+
+### Saved review decisions
+
+1. Added stable `decision_key` values and editable `review_status` fields to generated review CSV rows.
+2. Added `save-decisions` so approved and rejected review rows can be saved to `data/review-decisions.json`.
+3. Updated `analyze` to load saved decisions by default.
+4. Approved category moves are queued in future plans even when `--include-category-moves` is not used.
+5. Rejected category moves are skipped in future plans.
+6. Added `decide` so one category suggestion can be approved or rejected by `decision_key`.
+7. Added tests for decision import and planner behavior.
+8. Removed the completed saved decision and review status items from `future-upgrades.md`.
+
+### Review and planning controls
+
+1. Added analyze filters for duplicate cleanup, deleted video cleanup, playlist merges, and category suggestions.
+2. Added grouped move review output at `data/playlist-move-review.md`.
+3. Added weighted negative keyword support for category rules.
+4. Added `validate-config` to catch rule structure and preference errors before analyze.
+5. Added automatic rollback snapshots before confirmed live apply.
+6. Added collapsed review groups in the local web UI for large suggested move and overlap datasets.
+7. Added source and target playlist allowlists and blocklists for category suggestions.
+8. Added optional HTML report export at `data/playlist-report.html`.
+9. Added `plan-summary` for compact action counts, quota estimate, decision counts, and output paths.
+10. Added tests for filters, config validation, negative keyword behavior, move review output, rollback snapshots, UI command routing, playlist filters, HTML export, and plan summaries.
+11. Removed the completed filter, confirmation, move review, rollback, negative keyword, config validation, UI scale, playlist filter, HTML report, and plan summary items from `future-upgrades.md`.
+
+### Quota safe apply runs
+
+1. Added `--max-quota-cost` to `apply` so large plans can be previewed and applied in smaller quota bounded chunks.
+2. Added clear `quotaExceeded` handling around YouTube API calls so the CLI reports partial progress instead of dumping the raw Google exception.
+3. Updated apply recovery guidance to tell users not to rerun an old plan after a partial apply.
+4. Added CLI tests for quota chunk selection and apply preview output.
+
+### Quota documentation
+
+1. Documented that YouTube Data API quota resets at midnight Pacific Time.
+2. Documented that playlist item insert, update, and delete operations each cost 50 quota units.
+3. Added guidance for chunking large reorganizations, re-exporting after every live chunk, and avoiding API key or project rotation as a quota workaround.
+4. Updated the upgrade tracking files so shipped quota work is in `completed-upgrades.md` and only the remaining hard ceiling behavior stays in `future-upgrades.md`.
+
 ## 2026-05-21
 
 ### Liked video self image review

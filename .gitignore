@@ -9,6 +9,8 @@ future-upgrades.md
 data/*.json
 data/*.csv
 data/*.md
+data/*.html
+data/snapshots/
 !data/.gitkeep
 
 # Byte-compiled / optimized / DLL files

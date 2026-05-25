@@ -36,7 +36,10 @@ def get_tracked_files() -> list[tuple[str, Path]]:
     return [
         ("Plan JSON", DATA_DIR / "playlist-plan.json"),
         ("Report Markdown", DATA_DIR / "playlist-report.md"),
+        ("Report HTML", DATA_DIR / "playlist-report.html"),
         ("Review CSV", DATA_DIR / "playlist-review.csv"),
+        ("Move Review Markdown", DATA_DIR / "playlist-move-review.md"),
+        ("Review Decisions", DATA_DIR / "review-decisions.json"),
         ("Rules Config", CONFIG_DIR / "playlist-rules.json"),
     ]
 
@@ -58,7 +61,20 @@ def build_cli_command(form: dict[str, str]) -> list[str]:
             command += ["--rules-config", rules_config]
         if form.get("include_category_moves") == "on":
             command += ["--include-category-moves"]
+        if form.get("only_duplicates") == "on":
+            command += ["--only-duplicates"]
+        if form.get("only_deleted") == "on":
+            command += ["--only-deleted"]
+        if form.get("only_merges") == "on":
+            command += ["--only-merges"]
+        if form.get("only_category_suggestions") == "on":
+            command += ["--only-category-suggestions"]
         return command
+    if action == "validate_config":
+        rules_config = form.get("rules_config", "config/playlist-rules.json").strip()
+        return command + ["validate-config", "--rules-config", rules_config]
+    if action == "save_decisions":
+        return command + ["save-decisions"]
     if action == "apply_preview":
         return command + ["apply"]
     if action == "apply_live":
@@ -173,6 +189,7 @@ def render_move_groups(move_groups: list[dict]) -> str:
                 "<tr class='filter-row' "
                 f"data-filter='{html.escape((group['source'] + ' ' + group['target'] + ' ' + item['title'] + ' ' + item.get('confidence_label', '') + ' ' + reasons).lower())}'>"
                 f"<td>{html.escape(item['title'])}</td>"
+                f"<td>{html.escape(item.get('review_status', 'undecided'))}</td>"
                 f"<td>{html.escape(item.get('confidence_label', ''))}</td>"
                 f"<td>{html.escape(str(item.get('confidence_score', '')))}</td>"
                 f"<td>{html.escape(item['rule'])}</td>"
@@ -181,13 +198,13 @@ def render_move_groups(move_groups: list[dict]) -> str:
             )
 
         sections.append(
-            "<section class='card grouped-section'>"
-            f"<h3>{html.escape(group['source'])} -> {html.escape(group['target'])} ({group['count']})</h3>"
+            "<details class='card grouped-section'>"
+            f"<summary>{html.escape(group['source'])} -> {html.escape(group['target'])} ({group['count']})</summary>"
             "<table>"
-            "<thead><tr><th>Video</th><th>Confidence</th><th>Score</th><th>Rule</th><th>Details</th></tr></thead>"
+            "<thead><tr><th>Video</th><th>Status</th><th>Confidence</th><th>Score</th><th>Rule</th><th>Details</th></tr></thead>"
             f"<tbody>{''.join(rows)}</tbody>"
             "</table>"
-            "</section>"
+            "</details>"
         )
     return "".join(sections)
 
@@ -212,13 +229,13 @@ def render_overlap_groups(overlap_groups: list[dict]) -> str:
             )
 
         sections.append(
-            "<section class='card grouped-section'>"
-            f"<h3>{html.escape(group['group'])} ({group['count']})</h3>"
+            "<details class='card grouped-section'>"
+            f"<summary>{html.escape(group['group'])} ({group['count']})</summary>"
             "<table>"
             "<thead><tr><th>Left Playlist</th><th>Right Playlist</th><th>Overlap</th><th>Reason</th></tr></thead>"
             f"<tbody>{''.join(rows)}</tbody>"
             "</table>"
-            "</section>"
+            "</details>"
         )
     return "".join(sections)
 
@@ -388,6 +405,11 @@ def render_page(result: dict[str, str | int] | None = None, error: str = "") -> 
     .grouped-section {{
       margin-bottom: 18px;
     }}
+    details.grouped-section summary {{
+      cursor: pointer;
+      font-weight: 700;
+      margin-bottom: 12px;
+    }}
   </style>
 </head>
 <body>
@@ -427,8 +449,19 @@ def render_page(result: dict[str, str | int] | None = None, error: str = "") -> 
         <label for="rules_config">Rules Config Path</label>
         <input id="rules_config" type="text" name="rules_config" value="config/playlist-rules.json">
         <label><input type="checkbox" name="include_category_moves"> Include category moves in the apply plan</label>
+        <label><input type="checkbox" name="only_duplicates"> Only duplicates</label>
+        <label><input type="checkbox" name="only_deleted"> Only deleted videos</label>
+        <label><input type="checkbox" name="only_merges"> Only playlist merges</label>
+        <label><input type="checkbox" name="only_category_suggestions"> Only category suggestions</label>
         <input type="hidden" name="action" value="analyze">
         <button type="submit">Run Analyze</button>
+      </form>
+      <form method="post" action="/run" class="card">
+        <h2>Review Decisions</h2>
+        <p class="muted">Validate rules or save approved and rejected rows from the review CSV.</p>
+        <input type="hidden" name="rules_config" value="config/playlist-rules.json">
+        <button type="submit" name="action" value="validate_config" class="secondary">Validate Config</button>
+        <button type="submit" name="action" value="save_decisions">Save Decisions</button>
       </form>
       <form method="post" action="/run" class="card">
         <h2>Preview Apply</h2>
@@ -446,7 +479,7 @@ def render_page(result: dict[str, str | int] | None = None, error: str = "") -> 
       </form>
     </section>
 
-    <section id="moves-section">
+    <section>
       <h2>Tracked Files</h2>
       <table>
         <thead>
@@ -458,7 +491,7 @@ def render_page(result: dict[str, str | int] | None = None, error: str = "") -> 
       </table>
     </section>
 
-    <section id="overlap-section">
+    <section id="moves-section">
       <div class="toolbar">
         <h2 style="margin:0;">Suggested Reorganization</h2>
         <input id="moves-filter" type="text" placeholder="Filter by playlist, video title, or confidence">
@@ -468,7 +501,7 @@ def render_page(result: dict[str, str | int] | None = None, error: str = "") -> 
       {render_move_groups(move_groups)}
     </section>
 
-    <section>
+    <section id="overlap-section">
       <div class="toolbar">
         <h2 style="margin:0;">Overlap Review</h2>
         <input id="overlap-filter" type="text" placeholder="Filter by playlist names or review reason">

@@ -1,13 +1,22 @@
 from __future__ import annotations
 
 import csv
+import html
 import json
 import re
+import shutil
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from src.analysis.decisions import (
+    apply_decision_metadata,
+    decision_key_for_category_move,
+    decision_key_for_liked_video_flag,
+    decision_key_for_overlap,
+    load_review_decisions,
+)
 from src.analysis.rules import (
     build_overlap_review,
     find_category_moves,
@@ -323,48 +332,117 @@ def summarize_actions(actions: list[dict[str, Any]]) -> dict[str, int]:
     }
 
 
+def build_action_filter(
+    only_duplicates: bool = False,
+    only_deleted: bool = False,
+    only_merges: bool = False,
+    only_category_suggestions: bool = False,
+) -> set[str]:
+    selected = set()
+    if only_duplicates:
+        selected.add("duplicates")
+    if only_deleted:
+        selected.add("deleted")
+    if only_merges:
+        selected.add("merges")
+    if only_category_suggestions:
+        selected.add("category")
+    return selected or {"duplicates", "deleted", "merges", "category"}
+
+
+def create_rollback_snapshot(
+    snapshot_dir: str = "data/snapshots",
+    source_paths: list[str] | None = None,
+) -> Path:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    destination = Path(snapshot_dir) / timestamp
+    destination.mkdir(parents=True, exist_ok=True)
+
+    paths = source_paths or [
+        "data/playlists.json",
+        "data/playlist-plan.json",
+        "data/playlist-report.md",
+        "data/playlist-review.csv",
+        "data/playlist-move-review.md",
+        "data/review-decisions.json",
+    ]
+    manifest = []
+    for source_path in paths:
+        source = Path(source_path)
+        if not source.exists():
+            continue
+        target = destination / source.name
+        shutil.copy2(source, target)
+        manifest.append({"source": str(source), "snapshot": str(target)})
+
+    (destination / "manifest.json").write_text(
+        json.dumps(
+            {
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "files": manifest,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return destination
+
+
 def generate_plan(
     duplicates: list[dict[str, Any]],
     playlists_data: list[dict[str, Any]],
     include_category_moves: bool = False,
     rules_config_path: str | None = None,
+    decisions_path: str | None = None,
+    action_filter: set[str] | None = None,
 ) -> dict[str, Any]:
     profiles = build_playlist_profiles(playlists_data)
     rules_config = load_rules_config(rules_config_path)
+    review_decisions = load_review_decisions(decisions_path)
+    action_filter = action_filter or {"duplicates", "deleted", "merges", "category"}
     actions = []
     seen_playlist_creations = set()
 
-    for duplicate in duplicates:
-        keep_in = choose_keep_occurrence(duplicate, profiles, rules_config)
-        remove_from = [
-            occurrence
-            for occurrence in duplicate["occurrences"]
-            if occurrence["playlist_item_id"] != keep_in["playlist_item_id"]
-        ]
-        if not remove_from:
-            continue
+    if "duplicates" in action_filter:
+        for duplicate in duplicates:
+            keep_in = choose_keep_occurrence(duplicate, profiles, rules_config)
+            remove_from = [
+                occurrence
+                for occurrence in duplicate["occurrences"]
+                if occurrence["playlist_item_id"] != keep_in["playlist_item_id"]
+            ]
+            if not remove_from:
+                continue
 
-        actions.append(
-            {
-                "action": "remove_duplicate",
-                "video_id": duplicate["video_id"],
-                "title": duplicate["title"],
-                "keep_in": keep_in,
-                "remove_from": remove_from,
-            }
-        )
+            actions.append(
+                {
+                    "action": "remove_duplicate",
+                    "video_id": duplicate["video_id"],
+                    "title": duplicate["title"],
+                    "keep_in": keep_in,
+                    "remove_from": remove_from,
+                }
+            )
 
-    actions.extend(find_deleted_video_items(playlists_data))
+    if "deleted" in action_filter:
+        actions.extend(find_deleted_video_items(playlists_data))
 
     duplicate_lookup = build_duplicate_lookup(actions)
     category_moves = find_category_moves(playlists_data, rules_config)
     planned_category_moves = []
+    rejected_category_moves = 0
     for move in category_moves:
         if should_skip_move_due_to_duplicate(move, duplicate_lookup):
             continue
 
+        decision_key = decision_key_for_category_move(move)
+        apply_decision_metadata(move, decision_key, review_decisions)
+        if move["review_status"] == "rejected":
+            rejected_category_moves += 1
+            continue
+
         planned_category_moves.append(move)
-        if not include_category_moves:
+        if "category" not in action_filter or (not include_category_moves and move["review_status"] != "approved"):
             continue
 
         target_title = move["to_playlist"]["playlist_title"]
@@ -385,12 +463,17 @@ def generate_plan(
 
         actions.append(move)
 
-    merge_actions = find_same_title_playlist_merges(playlists_data, rules_config)
-    actions.extend(merge_actions)
+    if "merges" in action_filter:
+        merge_actions = find_same_title_playlist_merges(playlists_data, rules_config)
+        actions.extend(merge_actions)
 
     summary = summarize_actions(actions)
     overlap_review = build_overlap_review(playlists_data, rules_config)
     liked_video_flags = find_liked_video_flags(playlists_data, rules_config)
+    for review in overlap_review:
+        apply_decision_metadata(review, decision_key_for_overlap(review), review_decisions)
+    for item in liked_video_flags:
+        apply_decision_metadata(item, decision_key_for_liked_video_flag(item), review_decisions)
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -399,8 +482,11 @@ def generate_plan(
             "overlap_candidates": overlap_review,
             "category_move_candidates": planned_category_moves,
             "liked_video_flags": liked_video_flags,
+            "rejected_category_moves": rejected_category_moves,
         },
         "rules_config_path": rules_config_path or "auto",
+        "decisions_path": decisions_path or "none",
+        "action_filter": sorted(action_filter),
         "actions": actions,
     }
 
@@ -418,6 +504,7 @@ def write_report(
     overlap_candidates = plan.get("review", {}).get("overlap_candidates", [])
     category_move_candidates = plan.get("review", {}).get("category_move_candidates", [])
     liked_video_flags = plan.get("review", {}).get("liked_video_flags", [])
+    rejected_category_moves = plan.get("review", {}).get("rejected_category_moves", 0)
     actions = plan.get("actions", [])
     duplicate_actions = [action for action in actions if action["action"] == "remove_duplicate"]
     deleted_actions = [action for action in actions if action["action"] == "remove_deleted"]
@@ -429,6 +516,7 @@ def write_report(
         "",
         f"Generated: `{plan['generated_at']}`",
         f"Rules config: `{plan.get('rules_config_path', 'auto')}`",
+        f"Review decisions: `{plan.get('decisions_path', 'none')}`",
         "",
         "## Snapshot",
         "",
@@ -440,6 +528,8 @@ def write_report(
         f"- Playlist item moves: {summary['playlist_item_moves']}",
         f"- Playlist item removals: {summary['playlist_item_removals']}",
         f"- Suggested category moves not yet queued: {len(category_move_candidates) if not move_actions else 0}",
+        f"- Previously approved category moves queued: {sum(1 for action in move_actions if action.get('review_status') == 'approved')}",
+        f"- Rejected category moves skipped: {rejected_category_moves}",
         f"- Liked video self image review flags: {len(liked_video_flags)}",
         "",
         "## Automatic Actions",
@@ -478,6 +568,7 @@ def write_report(
             lines.append(
                 f"- `{action['title']}`: `{action['from_playlist']['playlist_title']}` -> "
                 f"`{action['to_playlist']['playlist_title']}`. "
+                f"Review status: {action.get('review_status', 'undecided')}. "
                 f"Confidence: {action.get('confidence_label', 'unknown')} ({action.get('confidence_score', 0)}). "
                 f"Reason: {action['rule']}. Details: {confidence_reasons}"
             )
@@ -499,6 +590,7 @@ def write_report(
             lines.append(
                 f"- `{action['title']}`: `{action['from_playlist']['playlist_title']}` -> "
                 f"`{action['to_playlist']['playlist_title']}`. "
+                f"Review status: {action.get('review_status', 'undecided')}. "
                 f"Confidence: {action.get('confidence_label', 'unknown')} ({action.get('confidence_score', 0)}). "
                 f"Reason: {action['rule']}. Details: {confidence_reasons}"
             )
@@ -596,7 +688,10 @@ def write_review_csv(
         rows.append(
             {
                 "review_type": "category_move",
+                "decision_key": action.get("decision_key", ""),
+                "review_status": action.get("review_status", "undecided"),
                 "title": action["title"],
+                "video_id": action.get("video_id", ""),
                 "source_playlist": action["from_playlist"]["playlist_title"],
                 "target_playlist": action["to_playlist"]["playlist_title"],
                 "confidence_label": action.get("confidence_label", ""),
@@ -614,7 +709,10 @@ def write_review_csv(
         rows.append(
             {
                 "review_type": "overlap",
+                "decision_key": review.get("decision_key", ""),
+                "review_status": review.get("review_status", "undecided"),
                 "title": "",
+                "video_id": "",
                 "source_playlist": review["left_playlist"],
                 "target_playlist": review["right_playlist"],
                 "confidence_label": "",
@@ -635,7 +733,10 @@ def write_review_csv(
         rows.append(
             {
                 "review_type": "liked_video_flag",
+                "decision_key": item.get("decision_key", ""),
+                "review_status": item.get("review_status", "undecided"),
                 "title": item["title"],
+                "video_id": item.get("video_id", ""),
                 "source_playlist": item["playlist_title"],
                 "target_playlist": "",
                 "confidence_label": item.get("confidence_label", ""),
@@ -654,7 +755,10 @@ def write_review_csv(
 
     fieldnames = [
         "review_type",
+        "decision_key",
+        "review_status",
         "title",
+        "video_id",
         "source_playlist",
         "target_playlist",
         "confidence_label",
@@ -672,3 +776,144 @@ def write_review_csv(
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def write_move_review(
+    plan: dict[str, Any],
+    path: str = "data/playlist-move-review.md",
+) -> None:
+    moves = plan.get("review", {}).get("category_move_candidates", [])
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for move in moves:
+        key = (
+            move["from_playlist"]["playlist_title"],
+            move["to_playlist"]["playlist_title"],
+        )
+        grouped.setdefault(key, []).append(move)
+
+    lines = [
+        "# Playlist Move Review",
+        "",
+        f"Generated: `{plan['generated_at']}`",
+        f"Review decisions: `{plan.get('decisions_path', 'none')}`",
+        "",
+        "Edit `data/playlist-review.csv` to set `review_status` to `approved`, `rejected`, or `undecided`.",
+        "Then run `python -m src.cli save-decisions`.",
+        "",
+    ]
+
+    if not grouped:
+        lines.append("No suggested category moves found.")
+    for (source, target), items in sorted(grouped.items()):
+        lines.extend(
+            [
+                f"## {source} -> {target}",
+                "",
+            ]
+        )
+        for item in sorted(items, key=lambda value: (-value.get("confidence_score", 0), value["title"].lower())):
+            negatives = "; ".join(
+                f"{', '.join(match['keywords'])} (-{match['weight']})"
+                for match in item.get("negative_keyword_matches", [])
+            )
+            negative_text = f" Negative matches: {negatives}." if negatives else ""
+            lines.append(
+                f"- `{item['title']}` | status `{item.get('review_status', 'undecided')}` | "
+                f"confidence {item.get('confidence_label', 'unknown')} ({item.get('confidence_score', 0)}) | "
+                f"decision `{item.get('decision_key', '')}`.{negative_text}"
+            )
+        lines.append("")
+
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text("\n".join(lines), encoding="utf-8")
+
+
+def write_html_report(
+    plan: dict[str, Any],
+    path: str = "data/playlist-report.html",
+) -> None:
+    summary = plan.get("summary", {})
+    review = plan.get("review", {})
+    actions = plan.get("actions", [])
+    category_moves = review.get("category_move_candidates", [])
+    overlap_candidates = review.get("overlap_candidates", [])
+    liked_video_flags = review.get("liked_video_flags", [])
+
+    def esc(value: Any) -> str:
+        return html.escape(str(value))
+
+    metric_rows = "".join(
+        f"<tr><th>{esc(label)}</th><td>{esc(value)}</td></tr>"
+        for label, value in [
+            ("Planned actions", summary.get("actions", 0)),
+            ("Duplicate videos", summary.get("duplicate_videos", 0)),
+            ("Deleted videos", summary.get("deleted_videos", 0)),
+            ("Category moves", summary.get("category_moves", 0)),
+            ("Playlist merges", summary.get("playlist_merges", 0)),
+            ("Playlist item moves", summary.get("playlist_item_moves", 0)),
+            ("Playlist item removals", summary.get("playlist_item_removals", 0)),
+            ("Suggested category moves", len(category_moves)),
+            ("Rejected category moves skipped", review.get("rejected_category_moves", 0)),
+            ("Liked video review flags", len(liked_video_flags)),
+        ]
+    )
+
+    action_rows = "".join(
+        f"<tr><td>{esc(action.get('action', ''))}</td><td>{esc(action.get('title', action.get('video_id', '')))}</td></tr>"
+        for action in actions[:50]
+    )
+    move_rows = "".join(
+        "<tr>"
+        f"<td>{esc(move.get('title', ''))}</td>"
+        f"<td>{esc(move.get('from_playlist', {}).get('playlist_title', ''))}</td>"
+        f"<td>{esc(move.get('to_playlist', {}).get('playlist_title', ''))}</td>"
+        f"<td>{esc(move.get('review_status', 'undecided'))}</td>"
+        f"<td>{esc(move.get('confidence_score', ''))}</td>"
+        "</tr>"
+        for move in category_moves[:100]
+    )
+    overlap_rows = "".join(
+        "<tr>"
+        f"<td>{esc(item.get('left_playlist', ''))}</td>"
+        f"<td>{esc(item.get('right_playlist', ''))}</td>"
+        f"<td>{esc(item.get('shared_videos', ''))}</td>"
+        f"<td>{esc(item.get('review_reason', ''))}</td>"
+        "</tr>"
+        for item in overlap_candidates[:100]
+    )
+
+    content = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Playlist Analysis Report</title>
+  <style>
+    body {{ font-family: Arial, sans-serif; margin: 32px; color: #1f2933; }}
+    h1, h2 {{ color: #17324d; }}
+    table {{ border-collapse: collapse; width: 100%; margin: 16px 0 28px; }}
+    th, td {{ border: 1px solid #c9d2dc; padding: 8px; text-align: left; vertical-align: top; }}
+    th {{ background: #eef3f8; }}
+    .muted {{ color: #637083; }}
+  </style>
+</head>
+<body>
+  <h1>Playlist Analysis Report</h1>
+  <p class="muted">Generated: {esc(plan.get('generated_at', ''))}</p>
+  <p class="muted">Rules config: {esc(plan.get('rules_config_path', 'auto'))}</p>
+  <p class="muted">Review decisions: {esc(plan.get('decisions_path', 'none'))}</p>
+
+  <h2>Summary</h2>
+  <table>{metric_rows}</table>
+
+  <h2>Planned Actions</h2>
+  <table><thead><tr><th>Action</th><th>Video or Playlist</th></tr></thead><tbody>{action_rows}</tbody></table>
+
+  <h2>Suggested Category Moves</h2>
+  <table><thead><tr><th>Video</th><th>Source</th><th>Target</th><th>Status</th><th>Score</th></tr></thead><tbody>{move_rows}</tbody></table>
+
+  <h2>Overlap Review</h2>
+  <table><thead><tr><th>Left</th><th>Right</th><th>Shared Videos</th><th>Reason</th></tr></thead><tbody>{overlap_rows}</tbody></table>
+</body>
+</html>"""
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text(content, encoding="utf-8")

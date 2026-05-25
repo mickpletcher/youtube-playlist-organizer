@@ -119,3 +119,159 @@ def test_apply_preview_shows_quota_chunk(tmp_path):
     assert "Selected chunk:" in result.stdout
     assert "1 action(s), 50 estimated quota units" in result.stdout
     assert "Skipping 1 later action(s)" in result.stdout
+
+
+def test_save_decisions_imports_approved_and_rejected_rows(tmp_path):
+    review_csv = tmp_path / "playlist-review.csv"
+    decisions_output = tmp_path / "review-decisions.json"
+    review_csv.write_text(
+        "\n".join(
+            [
+                "review_type,decision_key,review_status,title,video_id,source_playlist,target_playlist,reason",
+                "category_move,key-approved,approved,Prompt Video,video-1,AI,Prompt Engineering,Prompt match",
+                "category_move,key-rejected,rejected,ChatGPT Video,video-2,AI,ChatGPT,ChatGPT match",
+                "category_move,key-undecided,undecided,Other Video,video-3,AI,Other,Other match",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "save-decisions",
+            "--review-csv",
+            str(review_csv),
+            "--decisions-output",
+            str(decisions_output),
+        ],
+    )
+
+    payload = json.loads(decisions_output.read_text(encoding="utf-8"))
+
+    assert result.exit_code == 0
+    assert "Saved 2 review decision(s)" in result.stdout
+    assert [decision["decision_key"] for decision in payload["decisions"]] == [
+        "key-rejected",
+        "key-approved",
+    ]
+
+
+def test_decide_saves_one_review_decision(tmp_path):
+    review_csv = tmp_path / "playlist-review.csv"
+    decisions_output = tmp_path / "review-decisions.json"
+    review_csv.write_text(
+        "\n".join(
+            [
+                "review_type,decision_key,review_status,title,video_id,source_playlist,target_playlist,reason",
+                "category_move,key-approved,undecided,Prompt Video,video-1,AI,Prompt Engineering,Prompt match",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "decide",
+            "--decision-key",
+            "key-approved",
+            "--review-status",
+            "approved",
+            "--review-csv",
+            str(review_csv),
+            "--decisions-output",
+            str(decisions_output),
+        ],
+    )
+
+    payload = json.loads(decisions_output.read_text(encoding="utf-8"))
+
+    assert result.exit_code == 0
+    assert "Saved approved decision" in result.stdout
+    assert payload["decisions"][0]["decision_key"] == "key-approved"
+
+
+def test_validate_config_command_reports_valid_config(tmp_path):
+    config_path = tmp_path / "rules.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "privacy_defaults": {"created_playlist_privacy": "private"},
+                "keep_rules": {
+                    "preferred_playlist_titles": ["favorites"],
+                    "preferred_privacy_order": ["private", "public"],
+                },
+                "playlist_merge_preferences": {
+                    "prefer_private_target": True,
+                    "canonical_playlist_strategy": "largest_first",
+                },
+                "playlist_aliases": {},
+                "token_aliases": {},
+                "category_rules": [
+                    {
+                        "source_playlists": ["AI"],
+                        "target_playlist": "ChatGPT",
+                        "keyword_sets": [["chatgpt"]],
+                        "reason": "ChatGPT content should move.",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["validate-config", "--rules-config", str(config_path)])
+
+    assert result.exit_code == 0
+    assert "Config is valid" in result.stdout
+
+
+def test_plan_summary_prints_counts_without_preview_table(tmp_path):
+    plan_path = tmp_path / "playlist-plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-05-25T00:00:00Z",
+                "action_filter": ["category"],
+                "summary": {
+                    "actions": 1,
+                    "duplicate_videos": 0,
+                    "deleted_videos": 0,
+                    "category_moves": 1,
+                    "playlist_merges": 0,
+                    "playlist_item_removals": 1,
+                },
+                "review": {
+                    "category_move_candidates": [
+                        {
+                            "review_status": "approved",
+                        },
+                        {
+                            "review_status": "undecided",
+                        },
+                    ],
+                    "overlap_candidates": [
+                        {
+                            "review_status": "rejected",
+                        }
+                    ],
+                    "liked_video_flags": [],
+                },
+                "actions": [
+                    {
+                        "action": "move_to_playlist",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["plan-summary", "--plan-path", str(plan_path)])
+
+    assert result.exit_code == 0
+    assert "Estimated quota cost:" in result.stdout
+    assert "Review approved:" in result.stdout
+    assert "data/playlist-report.html" in result.stdout
+    assert "Video" not in result.stdout

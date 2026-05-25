@@ -158,6 +158,10 @@ def analyze(
     plan_output: str = typer.Option("data/playlist-plan.json", help="Path to write plan JSON"),
     report_output: str = typer.Option("data/playlist-report.md", help="Path to write review report"),
     review_csv_output: str = typer.Option("data/playlist-review.csv", help="Path to write review CSV"),
+    decisions_file: str = typer.Option(
+        "data/review-decisions.json",
+        help="Path to saved review decisions from earlier analysis runs",
+    ),
     rules_config: str = typer.Option(
         "config/playlist-rules.json",
         help="Path to category and playlist normalization rules in JSON or YAML format",
@@ -167,10 +171,34 @@ def analyze(
         "--include-category-moves",
         help="Add rule based reorganization moves to the apply plan",
     ),
+    only_duplicates: bool = typer.Option(False, "--only-duplicates", help="Only plan duplicate cleanup actions"),
+    only_deleted: bool = typer.Option(False, "--only-deleted", help="Only plan deleted video cleanup actions"),
+    only_merges: bool = typer.Option(False, "--only-merges", help="Only plan duplicate playlist merge actions"),
+    only_category_suggestions: bool = typer.Option(
+        False,
+        "--only-category-suggestions",
+        help="Only generate category move suggestions and approved category move actions",
+    ),
+    move_review_output: str = typer.Option(
+        "data/playlist-move-review.md",
+        help="Path to write grouped category move review markdown",
+    ),
+    html_report_output: str = typer.Option(
+        "data/playlist-report.html",
+        help="Path to write optional HTML review report",
+    ),
 ):
     """Scan playlists for duplicates and write a plan."""
     from src.analysis.duplicates import find_duplicates, load_export
-    from src.analysis.planner import generate_plan, write_plan, write_report, write_review_csv
+    from src.analysis.planner import (
+        build_action_filter,
+        generate_plan,
+        write_html_report,
+        write_move_review,
+        write_plan,
+        write_report,
+        write_review_csv,
+    )
 
     try:
         playlists_data = load_export(input_json)
@@ -186,6 +214,13 @@ def analyze(
             playlists_data,
             include_category_moves=include_category_moves,
             rules_config_path=rules_config,
+            decisions_path=decisions_file,
+            action_filter=build_action_filter(
+                only_duplicates=only_duplicates,
+                only_deleted=only_deleted,
+                only_merges=only_merges,
+                only_category_suggestions=only_category_suggestions,
+            ),
         )
     except FileNotFoundError:
         console.print(f"[red]Not found: {rules_config}[/red]")
@@ -198,9 +233,12 @@ def analyze(
     write_plan(plan, plan_output)
     write_report(plan, report_output)
     write_review_csv(plan, review_csv_output)
+    write_move_review(plan, move_review_output)
+    write_html_report(plan, html_report_output)
 
     summary = plan["summary"]
-    console.print(f"\n[bold]Duplicate videos:[/bold] {len(duplicates)}")
+    action_filter = set(plan.get("action_filter", []))
+    console.print(f"\n[bold]Duplicate videos:[/bold] {summary.get('duplicate_videos', 0)}")
     console.print(f"[bold]Deleted videos:[/bold] {summary.get('deleted_videos', 0)}")
     console.print(f"[bold]Category moves:[/bold] {summary.get('category_moves', 0)}")
     console.print(
@@ -212,7 +250,7 @@ def analyze(
     console.print(f"[bold]Planned removals:[/bold] {summary.get('playlist_item_removals', 0)}")
     console.print(f"[bold]Playlist creations:[/bold] {summary.get('playlist_creations', 0)}")
 
-    if duplicates:
+    if "duplicates" in action_filter and duplicates:
         table = Table(show_header=True, header_style="bold")
         table.add_column("Video", overflow="fold")
         table.add_column("Playlists", overflow="fold")
@@ -230,7 +268,142 @@ def analyze(
 
     console.print(f"\n[green]Plan written to[/green] {plan_output}")
     console.print(f"[green]Review report written to[/green] {report_output}")
-    console.print(f"[green]Review CSV written to[/green] {review_csv_output}\n")
+    console.print(f"[green]Review CSV written to[/green] {review_csv_output}")
+    console.print(f"[green]Move review written to[/green] {move_review_output}")
+    console.print(f"[green]HTML report written to[/green] {html_report_output}\n")
+
+
+@app.command()
+def plan_summary(
+    plan_path: str = typer.Option("data/playlist-plan.json", help="Path to plan JSON"),
+):
+    """Print a compact plan summary without preview tables."""
+    import json
+    from pathlib import Path
+
+    plan_file = Path(plan_path)
+    if not plan_file.exists():
+        console.print(f"[red]Not found: {plan_path}[/red]")
+        console.print("Run analyze first.")
+        raise typer.Exit(1)
+
+    plan = json.loads(plan_file.read_text(encoding="utf-8"))
+    actions = plan.get("actions", [])
+    summary = plan.get("summary", {})
+    review = plan.get("review", {})
+    review_items = (
+        review.get("category_move_candidates", [])
+        + review.get("overlap_candidates", [])
+        + review.get("liked_video_flags", [])
+    )
+    status_counts = {"approved": 0, "rejected": 0, "undecided": 0}
+    for item in review_items:
+        status = item.get("review_status", "undecided")
+        if status not in status_counts:
+            status = "undecided"
+        status_counts[status] += 1
+
+    console.print(f"\n[bold]Plan:[/bold] {plan_path}")
+    console.print(f"[bold]Generated:[/bold] {plan.get('generated_at', '')}")
+    console.print(f"[bold]Action filter:[/bold] {', '.join(plan.get('action_filter', []))}")
+    console.print(f"[bold]Estimated quota cost:[/bold] {estimate_quota_cost(actions)} units")
+    console.print(f"[bold]Planned actions:[/bold] {summary.get('actions', 0)}")
+    console.print(f"[bold]Duplicate videos:[/bold] {summary.get('duplicate_videos', 0)}")
+    console.print(f"[bold]Deleted videos:[/bold] {summary.get('deleted_videos', 0)}")
+    console.print(f"[bold]Category moves:[/bold] {summary.get('category_moves', 0)}")
+    console.print(f"[bold]Playlist merges:[/bold] {summary.get('playlist_merges', 0)}")
+    console.print(f"[bold]Playlist item removals:[/bold] {summary.get('playlist_item_removals', 0)}")
+    console.print(f"[bold]Review approved:[/bold] {status_counts['approved']}")
+    console.print(f"[bold]Review rejected:[/bold] {status_counts['rejected']}")
+    console.print(f"[bold]Review undecided:[/bold] {status_counts['undecided']}")
+    console.print("\n[bold]Output files:[/bold]")
+    console.print("  data/playlist-plan.json")
+    console.print("  data/playlist-report.md")
+    console.print("  data/playlist-report.html")
+    console.print("  data/playlist-review.csv")
+    console.print("  data/playlist-move-review.md\n")
+
+
+@app.command()
+def validate_config(
+    rules_config: str = typer.Option(
+        "config/playlist-rules.json",
+        help="Path to category and playlist normalization rules in JSON or YAML format",
+    ),
+):
+    """Validate the rules config before running analyze."""
+    from src.analysis.rules import load_rules_config, validate_rules_config
+
+    try:
+        config = load_rules_config(rules_config)
+    except FileNotFoundError:
+        console.print(f"[red]Not found: {rules_config}[/red]")
+        raise typer.Exit(1)
+    except (RuntimeError, ValueError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+
+    errors = validate_rules_config(config)
+    if errors:
+        console.print(f"[red]Config validation failed: {rules_config}[/red]")
+        for error in errors:
+            console.print(f"- {error}")
+        raise typer.Exit(1)
+
+    console.print(f"[green]Config is valid:[/green] {rules_config}")
+
+
+@app.command()
+def save_decisions(
+    review_csv: str = typer.Option("data/playlist-review.csv", help="Path to edited review CSV"),
+    decisions_output: str = typer.Option(
+        "data/review-decisions.json",
+        help="Path to write saved approved and rejected decisions",
+    ),
+):
+    """Save approved or rejected review CSV rows for future analyze runs."""
+    from src.analysis.decisions import save_decisions_from_review_csv
+
+    try:
+        count = save_decisions_from_review_csv(review_csv, decisions_output)
+    except FileNotFoundError:
+        console.print(f"[red]Not found: {review_csv}[/red]")
+        console.print("Run analyze first, then mark review_status values in the review CSV.")
+        raise typer.Exit(1)
+
+    console.print(f"[green]Saved {count} review decision(s) to {decisions_output}[/green]")
+    console.print("Future analyze runs will use those decisions by default.\n")
+
+
+@app.command()
+def decide(
+    decision_key: str = typer.Option(..., "--decision-key", help="Decision key from data/playlist-review.csv"),
+    review_status: str = typer.Option(..., "--review-status", help="approved or rejected"),
+    review_csv: str = typer.Option("data/playlist-review.csv", help="Path to review CSV"),
+    decisions_output: str = typer.Option(
+        "data/review-decisions.json",
+        help="Path to write saved approved and rejected decisions",
+    ),
+):
+    """Approve or reject one review row by decision key."""
+    from src.analysis.decisions import save_decision_by_key
+
+    try:
+        decision = save_decision_by_key(decision_key, review_status, review_csv, decisions_output)
+    except FileNotFoundError:
+        console.print(f"[red]Not found: {review_csv}[/red]")
+        raise typer.Exit(1)
+    except KeyError:
+        console.print(f"[red]Decision key not found in review CSV: {decision_key}[/red]")
+        raise typer.Exit(1)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+
+    console.print(
+        f"[green]Saved {decision['review_status']} decision for[/green] "
+        f"{decision.get('title', decision_key)}"
+    )
 
 
 @app.command()
@@ -248,6 +421,12 @@ def apply(
         "--max-quota-cost",
         min=0,
         help="Apply only the first actions that fit this quota cost. Use 0 for the full plan.",
+    ),
+    snapshot_dir: str = typer.Option("data/snapshots", help="Directory for automatic rollback snapshots"),
+    skip_rollback_snapshot: bool = typer.Option(
+        False,
+        "--skip-rollback-snapshot",
+        help="Do not copy current local data files before a confirmed live apply",
     ),
 ):
     """Apply the generated plan to YouTube."""
@@ -350,6 +529,12 @@ def apply(
     if confirm != "APPLY":
         console.print("\n[yellow]Dry run only. Re run with --confirm to apply changes.[/yellow]\n")
         raise typer.Exit()
+
+    if not skip_rollback_snapshot:
+        from src.analysis.planner import create_rollback_snapshot
+
+        snapshot_path = create_rollback_snapshot(snapshot_dir)
+        console.print(f"[green]Rollback snapshot written to[/green] {snapshot_path}")
 
     client = get_youtube_client(client_secret, token_file, readonly=False)
     created_playlists: dict[str, str] = {}
