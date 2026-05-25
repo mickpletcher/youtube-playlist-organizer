@@ -18,20 +18,40 @@ def safe_text(value: str) -> str:
 def estimate_quota_cost(actions: list[dict]) -> int:
     cost = 0
     for action in actions:
-        action_name = action["action"]
-        if action_name == "remove_duplicate":
-            cost += len(action.get("remove_from", [])) * 50
-        elif action_name == "remove_deleted":
-            cost += 50
-        elif action_name == "create_playlist":
-            cost += 50
-        elif action_name == "move_to_playlist":
-            cost += 100
-        elif action_name == "merge_playlist":
-            cost += (len(action.get("move_items", [])) * 100)
-            cost += (len(action.get("remove_items", [])) * 50)
-            cost += 50
+        cost += estimate_action_quota_cost(action)
     return cost
+
+
+def estimate_action_quota_cost(action: dict) -> int:
+    action_name = action["action"]
+    if action_name == "remove_duplicate":
+        return len(action.get("remove_from", [])) * 50
+    if action_name == "remove_deleted":
+        return 50
+    if action_name == "create_playlist":
+        return 50
+    if action_name == "move_to_playlist":
+        return 100
+    if action_name == "merge_playlist":
+        return (len(action.get("move_items", [])) * 100) + (len(action.get("remove_items", [])) * 50) + 50
+    return 0
+
+
+def limit_actions_by_quota(actions: list[dict], max_quota_cost: int) -> tuple[list[dict], int]:
+    if max_quota_cost <= 0:
+        return actions, estimate_quota_cost(actions)
+
+    selected = []
+    selected_cost = 0
+    for action in actions:
+        action_cost = estimate_action_quota_cost(action)
+        if selected and selected_cost + action_cost > max_quota_cost:
+            break
+        if not selected and action_cost > max_quota_cost:
+            break
+        selected.append(action)
+        selected_cost += action_cost
+    return selected, selected_cost
 
 
 @app.command()
@@ -223,6 +243,12 @@ def apply(
     ),
     plan_path: str = typer.Option("data/playlist-plan.json", help="Path to plan JSON"),
     confirm: str = typer.Option("", "--confirm", help="Type APPLY to apply changes"),
+    max_quota_cost: int = typer.Option(
+        0,
+        "--max-quota-cost",
+        min=0,
+        help="Apply only the first actions that fit this quota cost. Use 0 for the full plan.",
+    ),
 ):
     """Apply the generated plan to YouTube."""
     import json
@@ -233,6 +259,7 @@ def apply(
         create_playlist,
         delete_playlist,
         delete_playlist_item,
+        YouTubeQuotaExceeded,
     )
     from src.auth.oauth import get_youtube_client
 
@@ -252,6 +279,8 @@ def apply(
     playlist_item_moves = summary.get("playlist_item_moves", 0)
     removals = summary.get("playlist_item_removals", 0)
 
+    selected_actions, selected_quota_cost = limit_actions_by_quota(actions, max_quota_cost)
+
     console.print(f"\n[bold]Plan actions:[/bold] {len(actions)}")
     console.print(f"[bold]Deleted videos:[/bold] {deleted_videos}")
     console.print(f"[bold]Playlist merges:[/bold] {playlist_merges}")
@@ -259,14 +288,23 @@ def apply(
     console.print(f"[bold]Playlist item removals:[/bold] {removals}")
     console.print(f"[bold]Category moves:[/bold] {category_moves}")
     console.print(f"[bold]Playlist creations:[/bold] {playlist_creations}")
-    console.print(f"[bold]Estimated quota cost:[/bold] {estimate_quota_cost(actions)} units\n")
+    console.print(f"[bold]Estimated quota cost:[/bold] {estimate_quota_cost(actions)} units")
+    if max_quota_cost > 0:
+        console.print(
+            f"[bold]Selected chunk:[/bold] {len(selected_actions)} action(s), "
+            f"{selected_quota_cost} estimated quota units"
+        )
+        skipped = len(actions) - len(selected_actions)
+        if skipped:
+            console.print(f"[yellow]Skipping {skipped} later action(s) in this run.[/yellow]")
+    console.print()
 
     preview_table = Table(show_header=True, header_style="bold")
     preview_table.add_column("Video", overflow="fold")
     preview_table.add_column("Keep In", overflow="fold")
     preview_table.add_column("Remove From", overflow="fold")
 
-    for action in actions[:20]:
+    for action in selected_actions[:20]:
         if action["action"] == "remove_duplicate":
             preview_table.add_row(
                 action["title"] or action["video_id"],
@@ -303,8 +341,11 @@ def apply(
 
     if actions:
         console.print(preview_table)
-        if len(actions) > 20:
-            console.print(f"\nShowing 20 of {len(actions)} actions.")
+        if len(selected_actions) > 20:
+            console.print(f"\nShowing 20 of {len(selected_actions)} selected actions.")
+    if max_quota_cost > 0 and not selected_actions:
+        console.print("\n[red]No actions fit the requested quota budget.[/red]")
+        raise typer.Exit(1)
 
     if confirm != "APPLY":
         console.print("\n[yellow]Dry run only. Re run with --confirm to apply changes.[/yellow]\n")
@@ -314,110 +355,116 @@ def apply(
     created_playlists: dict[str, str] = {}
 
     completed = 0
-    for action in actions:
-        if action["action"] == "create_playlist":
-            playlist_id = create_playlist(
-                client,
-                title=action["title"],
-                privacy=action.get("privacy", "private"),
-            )
-            created_playlists[action["title"]] = playlist_id
-            console.print(f"Created [bold]{action['title']}[/bold]")
-            continue
+    try:
+        for action in selected_actions:
+            if action["action"] == "create_playlist":
+                playlist_id = create_playlist(
+                    client,
+                    title=action["title"],
+                    privacy=action.get("privacy", "private"),
+                )
+                created_playlists[action["title"]] = playlist_id
+                console.print(f"Created [bold]{action['title']}[/bold]")
+                continue
 
-        if action["action"] == "remove_duplicate":
-            for item in action.get("remove_from", []):
-                deleted = delete_playlist_item(client, item["playlist_item_id"])
+            if action["action"] == "remove_duplicate":
+                for item in action.get("remove_from", []):
+                    deleted = delete_playlist_item(client, item["playlist_item_id"])
+                    if not deleted:
+                        console.print(
+                            f"Skipped missing item for [cyan]{safe_text(action['title'] or action['video_id'])}[/cyan] in "
+                            f"[bold]{item['playlist_title']}[/bold]"
+                        )
+                        continue
+
+                    completed += 1
+                    console.print(
+                        f"Removed [cyan]{safe_text(action['title'] or action['video_id'])}[/cyan] from "
+                        f"[bold]{item['playlist_title']}[/bold]"
+                    )
+                continue
+
+            if action["action"] == "remove_deleted":
+                deleted = delete_playlist_item(client, action["from_playlist"]["playlist_item_id"])
                 if not deleted:
                     console.print(
-                        f"Skipped missing item for [cyan]{safe_text(action['title'] or action['video_id'])}[/cyan] in "
-                        f"[bold]{item['playlist_title']}[/bold]"
+                        f"Skipped missing deleted entry in [bold]{action['from_playlist']['playlist_title']}[/bold]"
                     )
                     continue
 
                 completed += 1
                 console.print(
-                    f"Removed [cyan]{safe_text(action['title'] or action['video_id'])}[/cyan] from "
-                    f"[bold]{item['playlist_title']}[/bold]"
-                )
-            continue
-
-        if action["action"] == "remove_deleted":
-            deleted = delete_playlist_item(client, action["from_playlist"]["playlist_item_id"])
-            if not deleted:
-                console.print(
-                    f"Skipped missing deleted entry in [bold]{action['from_playlist']['playlist_title']}[/bold]"
+                    f"Removed deleted entry from [bold]{action['from_playlist']['playlist_title']}[/bold]"
                 )
                 continue
 
-            completed += 1
-            console.print(
-                f"Removed deleted entry from [bold]{action['from_playlist']['playlist_title']}[/bold]"
-            )
-            continue
-
-        if action["action"] == "move_to_playlist":
-            target_playlist_id = action["to_playlist"].get("playlist_id") or created_playlists.get(
-                action["to_playlist"]["playlist_title"]
-            )
-            if not target_playlist_id:
-                console.print(
-                    f"[red]Missing target playlist for {safe_text(action['title'])}: "
-                    f"{action['to_playlist']['playlist_title']}[/red]"
+            if action["action"] == "move_to_playlist":
+                target_playlist_id = action["to_playlist"].get("playlist_id") or created_playlists.get(
+                    action["to_playlist"]["playlist_title"]
                 )
-                raise typer.Exit(1)
+                if not target_playlist_id:
+                    console.print(
+                        f"[red]Missing target playlist for {safe_text(action['title'])}: "
+                        f"{action['to_playlist']['playlist_title']}[/red]"
+                    )
+                    raise typer.Exit(1)
 
-            add_video_to_playlist(client, target_playlist_id, action["video_id"])
-            deleted = delete_playlist_item(client, action["from_playlist"]["playlist_item_id"])
-            completed += 1
-            console.print(
-                f"Moved [cyan]{safe_text(action['title'])}[/cyan] from "
-                f"[bold]{action['from_playlist']['playlist_title']}[/bold] to "
-                f"[bold]{action['to_playlist']['playlist_title']}[/bold]"
-            )
-            if not deleted:
-                console.print(
-                    f"Skipped source removal because the item was already missing from "
-                    f"[bold]{action['from_playlist']['playlist_title']}[/bold]"
-                )
-            continue
-
-        if action["action"] == "merge_playlist":
-            target_playlist_id = action["target_playlist"]["playlist_id"]
-            source_playlist = action["source_playlist"]
-
-            for item in action.get("move_items", []):
-                add_video_to_playlist(client, target_playlist_id, item["video_id"])
-                deleted = delete_playlist_item(client, item["playlist_item_id"])
+                add_video_to_playlist(client, target_playlist_id, action["video_id"])
+                deleted = delete_playlist_item(client, action["from_playlist"]["playlist_item_id"])
                 completed += 1
                 console.print(
-                    f"Moved [cyan]{safe_text(item['title'] or item['video_id'])}[/cyan] from "
-                    f"[bold]{source_playlist['playlist_title']}[/bold] to "
-                    f"[bold]{action['target_playlist']['playlist_title']}[/bold]"
+                    f"Moved [cyan]{safe_text(action['title'])}[/cyan] from "
+                    f"[bold]{action['from_playlist']['playlist_title']}[/bold] to "
+                    f"[bold]{action['to_playlist']['playlist_title']}[/bold]"
                 )
                 if not deleted:
                     console.print(
                         f"Skipped source removal because the item was already missing from "
-                        f"[bold]{source_playlist['playlist_title']}[/bold]"
+                        f"[bold]{action['from_playlist']['playlist_title']}[/bold]"
                     )
+                continue
 
-            for item in action.get("remove_items", []):
-                deleted = delete_playlist_item(client, item["playlist_item_id"])
-                if not deleted:
+            if action["action"] == "merge_playlist":
+                target_playlist_id = action["target_playlist"]["playlist_id"]
+                source_playlist = action["source_playlist"]
+
+                for item in action.get("move_items", []):
+                    add_video_to_playlist(client, target_playlist_id, item["video_id"])
+                    deleted = delete_playlist_item(client, item["playlist_item_id"])
+                    completed += 1
                     console.print(
-                        f"Skipped duplicate cleanup because the item was already missing from "
+                        f"Moved [cyan]{safe_text(item['title'] or item['video_id'])}[/cyan] from "
+                        f"[bold]{source_playlist['playlist_title']}[/bold] to "
+                        f"[bold]{action['target_playlist']['playlist_title']}[/bold]"
+                    )
+                    if not deleted:
+                        console.print(
+                            f"Skipped source removal because the item was already missing from "
+                            f"[bold]{source_playlist['playlist_title']}[/bold]"
+                        )
+
+                for item in action.get("remove_items", []):
+                    deleted = delete_playlist_item(client, item["playlist_item_id"])
+                    if not deleted:
+                        console.print(
+                            f"Skipped duplicate cleanup because the item was already missing from "
+                            f"[bold]{source_playlist['playlist_title']}[/bold]"
+                        )
+                        continue
+
+                    completed += 1
+                    console.print(
+                        f"Removed duplicate [cyan]{safe_text(item['title'] or item['video_id'])}[/cyan] from "
                         f"[bold]{source_playlist['playlist_title']}[/bold]"
                     )
-                    continue
 
-                completed += 1
-                console.print(
-                    f"Removed duplicate [cyan]{safe_text(item['title'] or item['video_id'])}[/cyan] from "
-                    f"[bold]{source_playlist['playlist_title']}[/bold]"
-                )
-
-            delete_playlist(client, source_playlist["playlist_id"])
-            console.print(f"Deleted merged playlist [bold]{source_playlist['playlist_title']}[/bold]")
+                delete_playlist(client, source_playlist["playlist_id"])
+                console.print(f"Deleted merged playlist [bold]{source_playlist['playlist_title']}[/bold]")
+    except YouTubeQuotaExceeded as exc:
+        console.print(f"\n[red]{exc}[/red]")
+        console.print(f"[yellow]Applied {completed} change(s) before quota stopped the run.[/yellow]")
+        console.print("Do not rerun the same plan. After quota resets, run export, analyze, review, then apply a small chunk.")
+        raise typer.Exit(1) from exc
 
     console.print(f"\n[green]Applied {completed} change(s).[/green]\n")
 

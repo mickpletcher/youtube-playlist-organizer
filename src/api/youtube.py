@@ -1,5 +1,25 @@
-from src.models.playlist import Playlist, PlaylistItem
 from googleapiclient.errors import HttpError
+
+from src.models.playlist import Playlist, PlaylistItem
+
+
+class YouTubeQuotaExceeded(RuntimeError):
+    pass
+
+
+def _is_quota_exceeded(exc: HttpError) -> bool:
+    return "quotaExceeded" in str(exc)
+
+
+def _execute(request):
+    try:
+        return request.execute()
+    except HttpError as exc:
+        if _is_quota_exceeded(exc):
+            raise YouTubeQuotaExceeded(
+                "YouTube API quota is exhausted. Wait for the quota reset, then export and analyze again before applying more changes."
+            ) from exc
+        raise
 
 
 def get_playlists(client) -> list[Playlist]:
@@ -10,7 +30,7 @@ def get_playlists(client) -> list[Playlist]:
         maxResults=50,
     )
     while request:
-        response = request.execute()
+        response = _execute(request)
         for item in response.get("items", []):
             playlists.append(Playlist(
                 id=item["id"],
@@ -24,11 +44,11 @@ def get_playlists(client) -> list[Playlist]:
 
 
 def get_playlist_by_id(client, playlist_id: str) -> Playlist | None:
-    response = client.playlists().list(
+    response = _execute(client.playlists().list(
         part="snippet,contentDetails,status",
         id=playlist_id,
         maxResults=1,
-    ).execute()
+    ))
     items = response.get("items", [])
     if not items:
         return None
@@ -44,11 +64,11 @@ def get_playlist_by_id(client, playlist_id: str) -> Playlist | None:
 
 
 def get_liked_playlist(client) -> Playlist | None:
-    response = client.channels().list(
+    response = _execute(client.channels().list(
         part="contentDetails",
         mine=True,
         maxResults=1,
-    ).execute()
+    ))
     items = response.get("items", [])
     if not items:
         return None
@@ -83,7 +103,7 @@ def get_playlist_items(client, playlist_id: str) -> list[PlaylistItem]:
         maxResults=50,
     )
     while request:
-        response = request.execute()
+        response = _execute(request)
         for item in response.get("items", []):
             snippet = item["snippet"]
             items.append(PlaylistItem(
@@ -99,7 +119,7 @@ def get_playlist_items(client, playlist_id: str) -> list[PlaylistItem]:
 
 def delete_playlist_item(client, playlist_item_id: str) -> None:
     try:
-        client.playlistItems().delete(id=playlist_item_id).execute()
+        _execute(client.playlistItems().delete(id=playlist_item_id))
         return True
     except HttpError as exc:
         if "playlistItemNotFound" in str(exc):
@@ -119,19 +139,19 @@ def add_video_to_playlist(client, playlist_id: str, video_id: str, position: int
         snippet["position"] = position
 
     try:
-        client.playlistItems().insert(
+        _execute(client.playlistItems().insert(
             part="snippet",
             body={"snippet": snippet},
-        ).execute()
+        ))
     except HttpError as exc:
         if position is None or "manualSortRequired" not in str(exc):
             raise
 
         snippet.pop("position", None)
-        client.playlistItems().insert(
+        _execute(client.playlistItems().insert(
             part="snippet",
             body={"snippet": snippet},
-        ).execute()
+        ))
 
 
 def create_playlist(
@@ -140,7 +160,7 @@ def create_playlist(
     description: str = "",
     privacy: str = "private",
 ) -> str:
-    response = client.playlists().insert(
+    response = _execute(client.playlists().insert(
         part="snippet,status",
         body={
             "snippet": {
@@ -151,9 +171,9 @@ def create_playlist(
                 "privacyStatus": privacy,
             },
         },
-    ).execute()
+    ))
     return response["id"]
 
 
 def delete_playlist(client, playlist_id: str) -> None:
-    client.playlists().delete(id=playlist_id).execute()
+    _execute(client.playlists().delete(id=playlist_id))

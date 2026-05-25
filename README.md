@@ -522,6 +522,20 @@ Practical meaning:
 
 Always preview before live apply.
 
+For large plans, apply a small chunk:
+
+```powershell
+python -m src.cli apply --max-quota-cost 500
+python -m src.cli apply --confirm APPLY --max-quota-cost 500
+```
+
+After each live chunk:
+
+1. Run `python -m src.cli export`
+2. Run `python -m src.cli analyze`
+3. Review the new plan
+4. Apply the next chunk
+
 ## Troubleshooting
 
 ### Missing `client_secret.json`
@@ -583,6 +597,7 @@ Fix:
 3. Export again
 4. Analyze again
 5. Review again
+6. Apply a smaller chunk with `--max-quota-cost`
 
 ## Beginner Checklist
 
